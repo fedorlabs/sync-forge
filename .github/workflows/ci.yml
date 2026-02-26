@@ -5,6 +5,32 @@ on:
   pull_request:
 
 jobs:
+  quality:
+    name: Quality (PHP 8.3)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: PHP-CS-Fixer (dry run)
+        run: composer cs-check
+
+      - name: PHPStan
+        run: composer analyse
+
   tests-sqlite:
     name: PHP ${{ matrix.php }} SQLite
     runs-on: ubuntu-latest

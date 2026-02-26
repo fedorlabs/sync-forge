@@ -20,6 +20,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   - PHP-CS-Fixer
   - Unit and integration tests
   - GitHub Actions CI for SQLite + PostgreSQL + MySQL
+  - Dedicated CI quality gate job (`composer cs-check` + `composer analyse`)
 
 ### Changed
 - `FallbackBatchExecutor` behavior is now explicit dry-run-only in write mode.
