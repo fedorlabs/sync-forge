@@ -27,6 +27,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `SyncResult` now exposes `errors` and a non-trivial `isSuccess()`.
 - Key encoding is type-aware to avoid collisions between scalar types.
 - Date comparison normalization now handles common DB datetime string formats.
+- `deleteMissing` now uses streamed key scanning when provider supports it (DBAL provider) to avoid loading full keyspace into memory.
 
 ### Fixed
 - DBAL 4 connection setup in integration tests (`driver` required).

@@ -12,10 +12,12 @@ use SyncForge\Exception\MetadataException;
 use SyncForge\Key\KeyResolverInterface;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Pipeline\ExistingRowsProviderInterface;
+use SyncForge\Pipeline\StreamedExistingKeysProviderInterface;
 
-final class DbalExistingRowsProvider implements ExistingRowsProviderInterface
+final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, StreamedExistingKeysProviderInterface
 {
     private const COMPOSITE_KEY_BATCH_SIZE = 250;
+    private const KEY_SCAN_BATCH_SIZE = 1000;
 
     public function __construct(
         private readonly Connection $connection,
@@ -163,8 +165,19 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface
      */
     public function fetchAllKeys(EntityMetadata $metadata, array $keyFields): array
     {
+        $allRows = [];
+
+        foreach ($this->iterateAllKeys($metadata, $keyFields, self::KEY_SCAN_BATCH_SIZE) as $batchRows) {
+            $allRows = [...$allRows, ...$batchRows];
+        }
+
+        return $allRows;
+    }
+
+    public function iterateAllKeys(EntityMetadata $metadata, array $keyFields, int $batchSize = self::KEY_SCAN_BATCH_SIZE): iterable
+    {
         if ($keyFields === []) {
-            return [];
+            return;
         }
 
         $columns = [];
@@ -172,11 +185,30 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface
             $columns[] = $metadata->fieldToColumn[$keyField] ?? $keyField;
         }
 
-        $qb = $this->connection->createQueryBuilder();
         $quotedColumns = array_map(fn (string $column): string => $this->quoteIdentifier($column), $columns);
-        $rawRows = $qb->select(...$quotedColumns)->from($this->quoteIdentifier($metadata->tableName))->executeQuery()->fetchAllAssociative();
+        $offset = 0;
+        $limit = max(1, $batchSize);
 
-        return array_map(fn (array $rawRow): array => $this->mapColumnRowToFieldRow($metadata, $rawRow), $rawRows);
+        while (true) {
+            $qb = $this->connection->createQueryBuilder();
+            $qb->select(...$quotedColumns)
+                ->from($this->quoteIdentifier($metadata->tableName))
+                ->setFirstResult($offset)
+                ->setMaxResults($limit);
+
+            foreach ($columns as $column) {
+                $qb->addOrderBy($this->quoteIdentifier($column), 'ASC');
+            }
+
+            $rawRows = $qb->executeQuery()->fetchAllAssociative();
+            if ($rawRows === []) {
+                break;
+            }
+
+            yield array_map(fn (array $rawRow): array => $this->mapColumnRowToFieldRow($metadata, $rawRow), $rawRows);
+
+            $offset += count($rawRows);
+        }
     }
 
     /**

@@ -19,6 +19,7 @@ use SyncForge\Key\CompositeKeyResolver;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Metadata\InMemoryEntityMetadataProvider;
 use SyncForge\Pipeline\ExistingRowsProviderInterface;
+use SyncForge\Pipeline\StreamedExistingKeysProviderInterface;
 use SyncForge\Pipeline\SyncPipeline;
 use SyncForge\SyncContext;
 
@@ -241,6 +242,58 @@ final class SyncPipelineTest extends TestCase
         self::assertSame(1, $result->inserted);
         self::assertCount(1, $result->errors);
         self::assertFalse($result->isSuccess());
+    }
+
+    public function testDeleteMissingUsesStreamedKeyProviderWhenAvailable(): void
+    {
+        $metadata = $this->metadata();
+        $provider = new class () implements ExistingRowsProviderInterface, StreamedExistingKeysProviderInterface {
+            public bool $fetchAllCalled = false;
+            public int $streamCalls = 0;
+
+            public function fetchByIncomingRows(EntityMetadata $metadata, array $keyFields, array $incomingRows): array
+            {
+                return [];
+            }
+
+            public function fetchAllKeys(EntityMetadata $metadata, array $keyFields): array
+            {
+                $this->fetchAllCalled = true;
+
+                return [];
+            }
+
+            public function iterateAllKeys(EntityMetadata $metadata, array $keyFields, int $batchSize = 1000): iterable
+            {
+                $this->streamCalls++;
+                yield [['external_id' => 'A-1'], ['external_id' => 'B-1']];
+                yield [['external_id' => 'C-1']];
+            }
+        };
+
+        $pipeline = new SyncPipeline(
+            metadataProvider: new InMemoryEntityMetadataProvider([EntityStub::class => $metadata]),
+            keyResolver: new CompositeKeyResolver(),
+            diffEngine: new ScalarDiffEngine(),
+            executorFactory: new BulkExecutorFactory([new FallbackBatchExecutor()]),
+            platformDetector: new StaticPlatformDetector(new DatabasePlatformContext('fallback')),
+            existingRowsProvider: $provider,
+        );
+
+        $result = $pipeline->run(new SyncContext(
+            entityClass: EntityStub::class,
+            keyFields: ['external_id'],
+            source: [
+                ['external_id' => 'A-1', 'name' => 'Alpha'],
+            ],
+            chunkSize: 2,
+            deleteMissing: true,
+            dryRun: true,
+        ));
+
+        self::assertSame(1, $provider->streamCalls);
+        self::assertFalse($provider->fetchAllCalled);
+        self::assertSame(2, $result->deleted);
     }
 
     private function metadata(): EntityMetadata

@@ -13,6 +13,7 @@ use SyncForge\Diff\DiffPlan;
 use SyncForge\Exception\InvalidConfigurationException;
 use SyncForge\Exception\MetadataException;
 use SyncForge\Executor\BulkExecutorFactory;
+use SyncForge\Executor\BulkExecutorInterface;
 use SyncForge\Executor\ExecutionContext;
 use SyncForge\Executor\PlatformDetectorInterface;
 use SyncForge\Key\KeyResolverInterface;
@@ -101,16 +102,13 @@ final class SyncPipeline implements SyncPipelineInterface
             }
 
             try {
-                $deletePlan = $this->buildDeleteMissingPlan($metadata, $context->keyFields, $incomingKeySet);
-                if ($deletePlan !== null) {
-                    $executionResult = $executor->execute($deletePlan, new ExecutionContext(
-                        metadata: $metadata,
-                        keyFields: $context->keyFields,
-                        dryRun: $context->dryRun,
-                        chunkIndex: null,
-                    ));
-                    $deleted += $executionResult->deleted;
-                }
+                $deleted += $this->executeDeleteMissing(
+                    metadata: $metadata,
+                    keyFields: $context->keyFields,
+                    incomingKeySet: $incomingKeySet,
+                    executor: $executor,
+                    context: $context,
+                );
             } catch (Exception $e) {
                 if (!$context->continueOnError) {
                     throw $e;
@@ -157,25 +155,52 @@ final class SyncPipeline implements SyncPipelineInterface
      * @param list<string> $keyFields
      * @param array<string,bool> $incomingKeySet
      */
-    private function buildDeleteMissingPlan(EntityMetadata $metadata, array $keyFields, array $incomingKeySet): ?DiffPlan
-    {
-        $existingKeyRows = $this->existingRowsProvider->fetchAllKeys($metadata, $keyFields);
-        if ($existingKeyRows === []) {
-            return null;
+    private function executeDeleteMissing(
+        EntityMetadata $metadata,
+        array $keyFields,
+        array $incomingKeySet,
+        BulkExecutorInterface $executor,
+        SyncContext $context,
+    ): int {
+        $deleted = 0;
+
+        if ($this->existingRowsProvider instanceof StreamedExistingKeysProviderInterface) {
+            $batches = $this->existingRowsProvider->iterateAllKeys($metadata, $keyFields, $context->chunkSize);
+        } else {
+            $allRows = $this->existingRowsProvider->fetchAllKeys($metadata, $keyFields);
+            $batches = [$allRows];
         }
 
-        $toDelete = [];
-        foreach ($existingKeyRows as $row) {
-            $signature = $this->keyResolver->makeKey($row, $keyFields);
-            if (!isset($incomingKeySet[$signature])) {
-                $toDelete[] = $row;
+        foreach ($batches as $existingKeyRows) {
+            if ($existingKeyRows === []) {
+                continue;
             }
+
+            $toDelete = [];
+            foreach ($existingKeyRows as $row) {
+                $signature = $this->keyResolver->makeKey($row, $keyFields);
+                if (!isset($incomingKeySet[$signature])) {
+                    $toDelete[] = $row;
+                }
+            }
+
+            if ($toDelete === []) {
+                continue;
+            }
+
+            $executionResult = $executor->execute(
+                new DiffPlan(inserts: [], updates: [], deletes: $toDelete, unchanged: 0),
+                new ExecutionContext(
+                    metadata: $metadata,
+                    keyFields: $keyFields,
+                    dryRun: $context->dryRun,
+                    chunkIndex: null,
+                ),
+            );
+
+            $deleted += $executionResult->deleted;
         }
 
-        if ($toDelete === []) {
-            return null;
-        }
-
-        return new DiffPlan(inserts: [], updates: [], deletes: $toDelete, unchanged: 0);
+        return $deleted;
     }
 }
