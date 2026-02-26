@@ -124,6 +124,63 @@ final class SyncPipelineSqliteTest extends TestCase
         ], $all);
     }
 
+    /**
+     * @throws Exception
+     */
+    public function testLargeSingleKeyChunkSync(): void
+    {
+        $connection = DriverManager::getConnection([
+            'driver' => 'pdo_sqlite',
+            'memory' => true,
+        ]);
+        $this->createSchema($connection);
+        $syncForge = $this->buildSyncForge($connection);
+
+        $initialRows = [];
+        for ($i = 1; $i <= 1000; $i++) {
+            $initialRows[] = [
+                'external_id' => sprintf('SKU-%04d', $i),
+                'name' => 'Name ' . $i,
+                'price' => 100 + ($i % 50),
+            ];
+        }
+
+        $resultV1 = $syncForge->for(SqliteProductStub::class)
+            ->key(['external_id'])
+            ->source($initialRows)
+            ->chunkSize(1000)
+            ->run();
+
+        self::assertSame(1000, $resultV1->inserted);
+
+        $nextRows = [];
+        for ($i = 1; $i <= 800; $i++) {
+            $nextRows[] = [
+                'external_id' => sprintf('SKU-%04d', $i),
+                'name' => 'Name ' . $i,
+                'price' => $i <= 200 ? 999 : 100 + ($i % 50),
+            ];
+        }
+        for ($i = 1001; $i <= 1200; $i++) {
+            $nextRows[] = [
+                'external_id' => sprintf('SKU-%04d', $i),
+                'name' => 'Name ' . $i,
+                'price' => 150,
+            ];
+        }
+
+        $resultV2 = $syncForge->for(SqliteProductStub::class)
+            ->key(['external_id'])
+            ->source($nextRows)
+            ->chunkSize(1000)
+            ->deleteMissing(true)
+            ->run();
+
+        self::assertSame(200, $resultV2->inserted);
+        self::assertSame(200, $resultV2->updated);
+        self::assertSame(200, $resultV2->deleted);
+    }
+
     private function buildSyncForge(Connection $connection): SyncForge
     {
         $metadata = new EntityMetadata(
