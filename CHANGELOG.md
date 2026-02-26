@@ -32,8 +32,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Identifier quoting in DBAL existing-row lookup paths.
 - Deprecated/unsafe SQL identifier quoting patterns in executor paths.
 
+## [0.1.0-beta.1] - 2026-02-26
+
+### Added
+- Contribution guide (`CONTRIBUTING.md`).
+- Pull request template with quality gate checklist.
+
+### Changed
+- README status and tracking links aligned with beta-candidate workflow.
+
 ## [0.1.0-alpha] - 2026-02-26
 
 ### Added
 - Initial public alpha foundation for SyncForge.
-
