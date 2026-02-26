@@ -4,11 +4,12 @@
 
 SyncForge is a Symfony/Doctrine library for reconciling external datasets (`array`/`iterable`) with an entity table using batched DBAL operations.
 
-> Status: **alpha**, moving toward **v0.1.0-beta.1**.
+> Status: **beta candidate** (`v0.1.0-beta.1` track).
 >
 > Tracking docs:
 > - [Changelog](./CHANGELOG.md)
 > - [Roadmap](./ROADMAP.md)
+> - [Contributing](./CONTRIBUTING.md)
 > - [Release Checklist](./RELEASE_CHECKLIST.md)
 > - [Release Template](./.github/RELEASE_TEMPLATE.md)
 
@@ -219,6 +220,38 @@ make test-integration-external
 make analyse
 make test
 ```
+
+## Local Performance Benchmark
+
+You can run a local benchmark against PostgreSQL and MariaDB using Docker:
+
+```bash
+composer bench:up
+composer bench:run -- --sizes=1000,5000,10000 --chunk=1000 --seed=42
+composer bench:down
+```
+
+This benchmark reports:
+- sync runtime (ms)
+- memory delta
+- peak memory
+- insert/update/delete counters
+
+Example output on a local machine (`seed=42`, `chunk=1000`):
+
+```text
+== postgres ==
+n=1000    time=122ms   ins=200  upd=200  del=200
+n=5000    time=999ms   ins=1000 upd=1000 del=1000
+n=10000   time=2529ms  ins=2000 upd=2000 del=2000
+
+== mariadb ==
+n=1000    time=123ms   ins=200  upd=200  del=200
+n=5000    time=1302ms  ins=1000 upd=1000 del=1000
+n=10000   time=4086ms  ins=2000 upd=2000 del=2000
+```
+
+Numbers depend on CPU, disk, Docker runtime, and host load.
 
 ## Integration Tests
 
