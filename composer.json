@@ -1,0 +1,44 @@
+{
+  "name": "sync-forge/sync-forge",
+  "description": "Symfony-compatible reconciliation engine for bulk sync via DBAL",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": "^8.2",
+    "doctrine/dbal": "^4.2",
+    "symfony/config": "^6.4 || ^7.0",
+    "symfony/dependency-injection": "^6.4 || ^7.0",
+    "symfony/http-kernel": "^6.4 || ^7.0"
+  },
+  "require-dev": {
+    "friendsofphp/php-cs-fixer": "^3.66",
+    "phpstan/phpstan-deprecation-rules": "^1.2",
+    "phpstan/phpstan-phpunit": "^1.4",
+    "phpstan/phpstan-strict-rules": "^1.6",
+    "phpstan/phpstan": "^1.12",
+    "phpunit/phpunit": "^11.5"
+  },
+  "suggest": {
+    "doctrine/orm": "Required to use DoctrineOrmEntityMetadataProvider bridge"
+  },
+  "autoload": {
+    "psr-4": {
+      "SyncForge\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "SyncForge\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "vendor/bin/phpunit --testsuite Unit && vendor/bin/phpunit --filter SyncPipelineSqliteTest",
+    "test-unit": "vendor/bin/phpunit --testsuite Unit",
+    "test-integration": "vendor/bin/phpunit --filter SyncPipelineSqliteTest",
+    "test-integration-external": "vendor/bin/phpunit --filter \"SyncPipeline(Postgres|MySql)Test\"",
+    "lint": "find src tests config -name '*.php' -print0 | xargs -0 -n1 php -l",
+    "analyse": "vendor/bin/phpstan analyse --configuration=phpstan.neon --memory-limit=1G",
+    "cs-check": "vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.dist.php --allow-risky=yes --dry-run --diff",
+    "cs-fix": "vendor/bin/php-cs-fixer fix --config=.php-cs-fixer.dist.php --allow-risky=yes"
+  }
+}
