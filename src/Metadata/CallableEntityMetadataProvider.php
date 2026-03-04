@@ -7,10 +7,10 @@ namespace SyncForge\Metadata;
 use Closure;
 use SyncForge\Exception\MetadataException;
 
-final class DoctrineEntityMetadataProvider implements EntityMetadataProviderInterface
+final class CallableEntityMetadataProvider implements EntityMetadataProviderInterface
 {
     /**
-     * Adapter callable must return an array with keys:
+     * Callable must return an array with keys:
      * tableName, fields, fieldToColumn, identifierFields, updatableFields
      *
      * @var Closure(string):array<string,mixed>
@@ -38,7 +38,7 @@ final class DoctrineEntityMetadataProvider implements EntityMetadataProviderInte
 
         foreach (['tableName', 'fields', 'fieldToColumn', 'identifierFields', 'updatableFields'] as $required) {
             if (!array_key_exists($required, $raw)) {
-                throw new MetadataException(sprintf('Doctrine metadata loader result missing key "%s".', $required));
+                throw new MetadataException(sprintf('Metadata loader result missing key "%s".', $required));
             }
         }
 
