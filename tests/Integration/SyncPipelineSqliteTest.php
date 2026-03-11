@@ -181,6 +181,79 @@ final class SyncPipelineSqliteTest extends TestCase
         self::assertSame(200, $resultV2->deleted);
     }
 
+    /**
+     * @throws Exception
+     */
+    public function testCompositeKeyWithDeleteMissing(): void
+    {
+        $connection = DriverManager::getConnection([
+            'driver' => 'pdo_sqlite',
+            'memory' => true,
+        ]);
+
+        $connection->executeStatement(
+            'CREATE TABLE stock_levels (sku VARCHAR(64) NOT NULL, warehouse_code VARCHAR(16) NOT NULL, qty INTEGER NOT NULL, PRIMARY KEY (sku, warehouse_code))',
+        );
+
+        $connection->insert('stock_levels', ['sku' => 'SKU-A', 'warehouse_code' => 'WH-1', 'qty' => 10]);
+        $connection->insert('stock_levels', ['sku' => 'SKU-A', 'warehouse_code' => 'WH-2', 'qty' => 20]);
+        $connection->insert('stock_levels', ['sku' => 'SKU-B', 'warehouse_code' => 'WH-1', 'qty' => 30]);
+
+        $metadata = new EntityMetadata(
+            entityClass: SqliteStockStub::class,
+            tableName: 'stock_levels',
+            fields: ['sku', 'warehouse_code', 'qty'],
+            fieldToColumn: ['sku' => 'sku', 'warehouse_code' => 'warehouse_code', 'qty' => 'qty'],
+            identifierFields: ['sku', 'warehouse_code'],
+            updatableFields: ['qty'],
+        );
+
+        $keyResolver = new CompositeKeyResolver();
+
+        $syncForge = new SyncForge(
+            metadataProvider: new InMemoryEntityMetadataProvider([SqliteStockStub::class => $metadata]),
+            keyResolver: $keyResolver,
+            executorFactory: new BulkExecutorFactory([
+                new DbalPostgresBulkExecutor($connection),
+                new DbalMySqlBulkExecutor($connection),
+                new DbalFallbackBatchExecutor($connection),
+            ]),
+            platformDetector: new DbalPlatformDetector($connection),
+            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+        );
+
+        $incoming = [
+            ['sku' => 'SKU-A', 'warehouse_code' => 'WH-1', 'qty' => 15],
+            ['sku' => 'SKU-B', 'warehouse_code' => 'WH-1', 'qty' => 30],
+            ['sku' => 'SKU-C', 'warehouse_code' => 'WH-1', 'qty' => 5],
+        ];
+
+        $result = $syncForge->for(SqliteStockStub::class)
+            ->key(['sku', 'warehouse_code'])
+            ->source($incoming)
+            ->deleteMissing(true)
+            ->run();
+
+        self::assertSame(1, $result->inserted);
+        self::assertSame(1, $result->updated);
+        self::assertSame(1, $result->deleted);
+        self::assertSame(1, $result->unchanged);
+
+        $all = $connection->createQueryBuilder()
+            ->select('sku', 'warehouse_code', 'qty')
+            ->from('stock_levels')
+            ->orderBy('sku', 'ASC')
+            ->addOrderBy('warehouse_code', 'ASC')
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        self::assertSame([
+            ['sku' => 'SKU-A', 'warehouse_code' => 'WH-1', 'qty' => 15],
+            ['sku' => 'SKU-B', 'warehouse_code' => 'WH-1', 'qty' => 30],
+            ['sku' => 'SKU-C', 'warehouse_code' => 'WH-1', 'qty' => 5],
+        ], $all);
+    }
+
     private function buildSyncForge(Connection $connection): SyncForge
     {
         $metadata = new EntityMetadata(
@@ -223,5 +296,9 @@ final class SyncPipelineSqliteTest extends TestCase
 }
 
 final class SqliteProductStub
+{
+}
+
+final class SqliteStockStub
 {
 }
