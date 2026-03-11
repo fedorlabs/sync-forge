@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-03-11
+
+### Added
+- Integration test for composite key + `deleteMissing`
+
+### Changed
+- `DoctrineEntityMetadataProvider` renamed to `CallableEntityMetadataProvider` - the old name implied ORM, but it's a generic callable adapter
+
+### Fixed
+- CI badge URL in README
+
 ## [0.1.0-beta.1] - 2026-02-09
 
 First public beta.
