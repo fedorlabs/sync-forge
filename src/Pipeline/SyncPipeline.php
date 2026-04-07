@@ -12,6 +12,7 @@ use SyncForge\Diff\DiffEngineInterface;
 use SyncForge\Diff\DiffPlan;
 use SyncForge\Exception\InvalidConfigurationException;
 use SyncForge\Exception\MetadataException;
+use SyncForge\Exception\SyncExecutionException;
 use SyncForge\Executor\BulkExecutorFactory;
 use SyncForge\Executor\BulkExecutorInterface;
 use SyncForge\Executor\ExecutionContext;
@@ -19,6 +20,7 @@ use SyncForge\Executor\PlatformDetectorInterface;
 use SyncForge\Key\KeyResolverInterface;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Metadata\EntityMetadataProviderInterface;
+use SyncForge\Report\ErrorEntry;
 use SyncForge\Report\SyncResult;
 use SyncForge\SyncContext;
 
@@ -49,6 +51,7 @@ final class SyncPipeline implements SyncPipelineInterface
         $unchanged = 0;
         $chunkCount = 0;
         $warnings = [];
+        /** @var list<ErrorEntry> $errors */
         $errors = [];
         $incomingKeySet = [];
 
@@ -90,7 +93,11 @@ final class SyncPipeline implements SyncPipelineInterface
                 if (!$context->continueOnError) {
                     throw $e;
                 }
-                $errors[] = sprintf('Chunk %d failed: %s', $index, $e->getMessage());
+                $errors[] = new ErrorEntry(
+                    type: $this->classifyException($e),
+                    message: $e->getMessage(),
+                    chunkIndex: $index,
+                );
             }
         }
 
@@ -113,7 +120,10 @@ final class SyncPipeline implements SyncPipelineInterface
                 if (!$context->continueOnError) {
                     throw $e;
                 }
-                $errors[] = sprintf('Delete-missing phase failed: %s', $e->getMessage());
+                $errors[] = new ErrorEntry(
+                    type: $this->classifyException($e),
+                    message: $e->getMessage(),
+                );
             }
         }
 
@@ -202,5 +212,18 @@ final class SyncPipeline implements SyncPipelineInterface
         }
 
         return $deleted;
+    }
+
+    private function classifyException(\Throwable $e): string
+    {
+        if ($e instanceof InvalidConfigurationException || $e instanceof MetadataException) {
+            return ErrorEntry::TYPE_VALIDATION;
+        }
+
+        if ($e instanceof SyncExecutionException) {
+            return ErrorEntry::TYPE_DB;
+        }
+
+        return ErrorEntry::TYPE_PIPELINE;
     }
 }

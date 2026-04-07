@@ -11,7 +11,7 @@ final class SyncResult
 {
     /**
      * @param list<string> $warnings
-     * @param list<string> $errors
+     * @param list<ErrorEntry> $errors
      */
     public function __construct(
         public readonly string $entityClass,
@@ -52,7 +52,14 @@ final class SyncResult
             'chunkCount' => $this->chunkCount,
             'dryRun' => $this->dryRun,
             'warnings' => $this->warnings,
-            'errors' => $this->errors,
+            'errors' => array_map(
+                static fn (ErrorEntry $e): array => [
+                    'type' => $e->type,
+                    'message' => $e->message,
+                    'chunkIndex' => $e->chunkIndex,
+                ],
+                $this->errors,
+            ),
         ];
     }
 

@@ -21,6 +21,7 @@ use SyncForge\Metadata\InMemoryEntityMetadataProvider;
 use SyncForge\Pipeline\ExistingRowsProviderInterface;
 use SyncForge\Pipeline\StreamedExistingKeysProviderInterface;
 use SyncForge\Pipeline\SyncPipeline;
+use SyncForge\Report\ErrorEntry;
 use SyncForge\SyncContext;
 
 final class SyncPipelineTest extends TestCase
@@ -241,6 +242,8 @@ final class SyncPipelineTest extends TestCase
 
         self::assertSame(1, $result->inserted);
         self::assertCount(1, $result->errors);
+        self::assertSame(ErrorEntry::TYPE_PIPELINE, $result->errors[0]->type);
+        self::assertStringContainsString('boom', $result->errors[0]->message);
         self::assertFalse($result->isSuccess());
     }
 
