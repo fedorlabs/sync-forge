@@ -4,48 +4,26 @@
 
 SyncForge is a Symfony/Doctrine library for reconciling external datasets (`array`/`iterable`) with an entity table using batched DBAL operations.
 
-> Status: **beta candidate** (`v0.1.0-beta.1` track).
->
-> Tracking docs:
-> - [Changelog](./CHANGELOG.md)
-> - [Roadmap](./ROADMAP.md)
-> - [Contributing](./CONTRIBUTING.md)
-> - [Release Checklist](./RELEASE_CHECKLIST.md)
-> - [Release Template](./.github/RELEASE_TEMPLATE.md)
+> **Status: beta** (`v0.1.0-beta.2`). API is stable enough for integration testing.
 
-Typical use case:
-- you receive data from API/CSV/ERP/marketplace
-- you need to find existing records
-- detect changes
-- perform upsert
-- delete missing rows
-- do it in chunks without loading 100k entities into Doctrine UnitOfWork
+Typical use case: you get data from an API, CSV, ERP or marketplace feed, and need to keep a DB table in sync — upsert changed rows, delete rows that disappeared from the source, skip what hasn't changed — all without loading 100k entities into Doctrine's UnitOfWork.
 
 ## Features
 
-- Fluent API:
-  - `for(Entity::class)`
-  - `key([...])`
-  - `source(iterable)`
-  - `chunkSize(int)`
-  - `deleteMissing(bool)`
-  - `dryRun(bool)`
-  - `continueOnError(bool)`
-  - `run()`
-- Composite key support.
-- Diff detection with partial updates (changed fields only).
-- Batch execution via DBAL.
-- Platform executors:
-  - PostgreSQL
-  - MySQL/MariaDB
-  - fallback executor
-- Dry-run mode (plan without writes).
+- Fluent API: `->for(Entity::class)->key([...])->source($rows)->run()`
+- Composite key support
+- Diff detection — only changed fields go into UPDATE
+- Batch execution via DBAL
+- Platform executors: PostgreSQL, MySQL/MariaDB, fallback
+- `deleteMissing` with streamed key scan
+- Dry-run mode
+- `continueOnError` with typed error entries in `SyncResult`
 
 ## Requirements
 
 - PHP `^8.2`
 - Doctrine DBAL `^4.2`
-- Symfony + Doctrine ORM (for bundle/autowiring integration)
+- Symfony + Doctrine ORM (for bundle/autowiring)
 
 ## Installation
 
@@ -53,63 +31,40 @@ Typical use case:
 composer require sync-forge/sync-forge
 ```
 
-For local development of this repository:
-
-```bash
-composer install
-```
-
 ## Quick Start
 
 ```php
-<?php
-
-use SyncForge\SyncForge;
-
 $result = $syncForge->for(Product::class)
     ->key(['external_id'])
     ->source($rows)
     ->chunkSize(1000)
     ->deleteMissing(true)
-    ->dryRun(false)
     ->run();
 
-// $result->inserted / updated / deleted / unchanged
+echo $result->inserted;   // new rows
+echo $result->updated;    // changed rows
+echo $result->deleted;    // rows not in source anymore
+echo $result->unchanged;  // skipped (no diff)
 ```
 
 ## Symfony Integration
 
-1. Register the bundle in `config/bundles.php`:
+Register the bundle in `config/bundles.php`:
 
 ```php
-return [
-    // ...
-    SyncForge\SyncForgeBundle::class => ['all' => true],
-];
+SyncForge\SyncForgeBundle::class => ['all' => true],
 ```
 
-2. Ensure these Doctrine services exist:
-- `doctrine.orm.entity_manager`
-- `doctrine.dbal.default_connection`
-
-3. Use `SyncForge\SyncForge` through DI/autowiring:
+The bundle autowires `SyncForge` using `doctrine.orm.entity_manager` and `doctrine.dbal.default_connection`.
 
 ```php
-<?php
-
-namespace App\Service;
-
-use SyncForge\SyncForge;
-
 final class ProductSyncService
 {
-    public function __construct(private readonly SyncForge $syncForge)
-    {
-    }
+    public function __construct(private readonly SyncForge $syncForge) {}
 
     public function sync(iterable $rows): void
     {
-        $this->syncForge->for(\App\Entity\Product::class)
+        $this->syncForge->for(Product::class)
             ->key(['externalId'])
             ->source($rows)
             ->chunkSize(1000)
@@ -121,16 +76,40 @@ final class ProductSyncService
 
 ## Examples
 
-### 1. Upsert only (no delete)
+### Paginated API source
+
+Passing a generator lets SyncForge stream pages without loading everything into memory first:
 
 ```php
+function fetchFromApi(HttpClientInterface $client): iterable
+{
+    $page = 1;
+    do {
+        $data = $client->request('GET', '/api/products', [
+            'query' => ['page' => $page, 'per_page' => 500],
+        ])->toArray();
+
+        foreach ($data['items'] as $item) {
+            yield [
+                'external_id' => $item['id'],
+                'name'        => $item['title'],
+                'price'       => (int) round($item['price'] * 100),
+            ];
+        }
+
+        $page++;
+    } while ($data['has_more'] ?? false);
+}
+
 $result = $syncForge->for(Product::class)
     ->key(['external_id'])
-    ->source($supplierRows)
+    ->source(fetchFromApi($client))
+    ->chunkSize(500)
+    ->deleteMissing(true)
     ->run();
 ```
 
-### 2. Composite key
+### Composite key
 
 ```php
 $result = $syncForge->for(StockLevel::class)
@@ -140,7 +119,7 @@ $result = $syncForge->for(StockLevel::class)
     ->run();
 ```
 
-### 3. Dry-run
+### Dry-run before delete
 
 ```php
 $result = $syncForge->for(Product::class)
@@ -150,62 +129,68 @@ $result = $syncForge->for(Product::class)
     ->dryRun(true)
     ->run();
 
-if ($result->dryRun) {
-    // Inspect counters and plan impact before real write mode
+printf("would delete %d rows\n", $result->deleted);
+```
+
+### Error handling
+
+```php
+$result = $syncForge->for(Product::class)
+    ->key(['external_id'])
+    ->source($rows)
+    ->continueOnError(true)
+    ->run();
+
+if (!$result->isSuccess()) {
+    foreach ($result->errors as $error) {
+        // $error->type: 'validation' | 'db' | 'pipeline'
+        // $error->chunkIndex: which chunk failed (null for delete-missing phase)
+        logger->error($error->type . ': ' . $error->message);
+    }
 }
 ```
 
-## Current MVP Limitations
-
-- Bulk path uses DBAL and bypasses Doctrine lifecycle callbacks.
-- Diff is scalar-oriented (no deep JSON semantics).
-- `deleteMissing(true)` should be enabled only with a clearly bounded sync scope.
-- `deleteMissing(true)` with an empty source is blocked by default as a safety guard.
-- Core fallback executor is dry-run only. Real writes require a DBAL-backed executor setup.
-- No async workers, audit storage, or monitoring UI yet.
-
 ## Sync Result
 
-`run()` returns `SyncResult` with:
-- `processedRows`
-- `inserted`
-- `updated`
-- `deleted`
-- `unchanged`
-- `chunkCount`
-- `dryRun`
-- `warnings`
-- `errors`
+`run()` returns `SyncResult`:
 
-## Development Commands
+| Property | Type | Description |
+|---|---|---|
+| `inserted` | `int` | rows inserted |
+| `updated` | `int` | rows updated |
+| `deleted` | `int` | rows deleted |
+| `unchanged` | `int` | rows with no diff |
+| `processedRows` | `int` | total incoming rows |
+| `chunkCount` | `int` | number of chunks processed |
+| `dryRun` | `bool` | whether writes were skipped |
+| `warnings` | `list<string>` | e.g. duplicate key warnings |
+| `errors` | `list<ErrorEntry>` | typed errors when `continueOnError` is on |
+| `isSuccess()` | `bool` | true when `errors` is empty |
 
-```bash
-composer lint
-composer cs-check
-composer cs-fix
-composer test-unit
-composer test-integration
-composer test-integration-external
-composer analyse
-composer test
+## Limitations
+
+- Bypasses Doctrine lifecycle callbacks (uses DBAL directly).
+- Diff is scalar-oriented — no deep JSON comparison.
+- `deleteMissing(true)` with an empty source throws as a safety guard.
+- No async workers or audit log yet.
+
+## Performance Benchmark
+
+Local numbers on a MacBook (`seed=42`, `chunk=1000`, Docker):
+
+```
+== postgres ==
+n=1000    time=180ms   mem_delta=2MB   ins=200   upd=200   del=200
+n=5000    time=763ms   mem_delta=4MB   ins=1000  upd=1000  del=1000
+n=10000   time=1442ms  mem_delta=2MB   ins=2000  upd=2000  del=1000
+
+== mariadb ==
+n=1000    time=162ms   mem_delta=0     ins=200   upd=200   del=200
+n=5000    time=999ms   mem_delta=0     ins=1000  upd=1000  del=1000
+n=10000   time=1219ms  mem_delta=0     ins=2000  upd=2000  del=1000
 ```
 
-or
-
-```bash
-make lint
-make cs-check
-make cs-fix
-make test-unit
-make test-integration
-make test-integration-external
-make analyse
-make test
-```
-
-## Local Performance Benchmark
-
-You can run a local benchmark against PostgreSQL and MariaDB using Docker:
+To run yourself:
 
 ```bash
 composer bench:up
@@ -213,53 +198,24 @@ composer bench:run -- --sizes=1000,5000,10000 --chunk=1000 --seed=42
 composer bench:down
 ```
 
-This benchmark reports:
-- sync runtime (ms)
-- memory delta
-- peak memory
-- insert/update/delete counters
-
-Example output on a local machine (`seed=42`, `chunk=1000`):
-
-```text
-== postgres ==
-n=1000    time=122ms   ins=200  upd=200  del=200
-n=5000    time=999ms   ins=1000 upd=1000 del=1000
-n=10000   time=2529ms  ins=2000 upd=2000 del=2000
-
-== mariadb ==
-n=1000    time=123ms   ins=200  upd=200  del=200
-n=5000    time=1302ms  ins=1000 upd=1000 del=1000
-n=10000   time=4086ms  ins=2000 upd=2000 del=2000
-```
-
-Numbers depend on CPU, disk, Docker runtime, and host load.
-
 ## Integration Tests
 
-- SQLite: runs with no additional env vars.
-- PostgreSQL: use `composer test-integration-external` with `TEST_PG_DSN`.
-- MySQL: use `composer test-integration-external` with `TEST_MYSQL_DSN`.
+- SQLite: no env vars needed, runs with `composer test`
+- PostgreSQL: `TEST_PG_DSN=pgsql://sync_forge:sync_forge@127.0.0.1:5432/sync_forge_test`
+- MySQL: `TEST_MYSQL_DSN=mysql://sync_forge:sync_forge@127.0.0.1:3306/sync_forge_test`
 
-Example DSNs:
-- `TEST_PG_DSN=pgsql://sync_forge:sync_forge@127.0.0.1:5432/sync_forge_test`
-- `TEST_MYSQL_DSN=mysql://sync_forge:sync_forge@127.0.0.1:3306/sync_forge_test`
+```bash
+composer test-integration-external
+```
 
-If DSN env vars are missing, external DB integration tests are skipped.
+## Development
 
-## CI
-
-GitHub Actions workflow: `.github/workflows/ci.yml`
-
-Pipeline runs:
-- lint + unit + SQLite integration
-- PostgreSQL integration
-- MySQL integration
-
-## Release Readiness
-
-Before cutting `v0.1.0-beta.1`:
-1. CI is green on the release branch.
-2. `composer cs-check`, `composer analyse`, and `composer test` are green.
-3. PostgreSQL and MySQL integration jobs pass in CI.
-4. `CHANGELOG.md` and release notes are updated.
+```bash
+composer lint
+composer cs-check
+composer cs-fix
+composer test-unit
+composer test-integration
+composer analyse
+composer test
+```
