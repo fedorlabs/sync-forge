@@ -73,7 +73,9 @@ final class ScalarDiffEngine implements DiffEngineInterface
     private function normalize(mixed $value): mixed
     {
         if ($value instanceof DateTimeInterface) {
-            return $value->format('Y-m-d\TH:i:sP');
+            return DateTimeImmutable::createFromInterface($value)
+                ->setTimezone(new DateTimeZone('UTC'))
+                ->format('Y-m-d\TH:i:sP');
         }
 
         if (is_string($value)) {

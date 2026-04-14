@@ -123,6 +123,99 @@ final class ScalarDiffEngineTest extends TestCase
         self::assertSame(1, $plan->unchanged);
     }
 
+    public function testSameUtcMomentInDifferentTimezonesIsUnchanged(): void
+    {
+        $engine = new ScalarDiffEngine();
+        $metadata = $this->metadata(['updated_at']);
+        $context = new DiffContext($metadata, ['external_id']);
+        $resolver = new CompositeKeyResolver();
+
+        $key = $resolver->makeKey(['external_id' => 'A-1'], ['external_id']);
+
+        // 2025-01-01 03:00 UTC+3 == 2025-01-01 00:00 UTC
+        $incoming = [
+            $key => ['external_id' => 'A-1', 'updated_at' => new \DateTimeImmutable('2025-01-01T03:00:00+03:00')],
+        ];
+
+        $existing = [
+            $key => ['external_id' => 'A-1', 'updated_at' => '2025-01-01 00:00:00'],
+        ];
+
+        $plan = $engine->diff($incoming, $existing, $context);
+
+        self::assertCount(0, $plan->updates);
+        self::assertSame(1, $plan->unchanged);
+    }
+
+    public function testDateTimeStringWithMicrosecondsIsUnchanged(): void
+    {
+        $engine = new ScalarDiffEngine();
+        $metadata = $this->metadata(['updated_at']);
+        $context = new DiffContext($metadata, ['external_id']);
+        $resolver = new CompositeKeyResolver();
+
+        $key = $resolver->makeKey(['external_id' => 'A-1'], ['external_id']);
+
+        $incoming = [
+            $key => ['external_id' => 'A-1', 'updated_at' => new \DateTimeImmutable('2025-06-15T10:30:00+00:00')],
+        ];
+
+        $existing = [
+            $key => ['external_id' => 'A-1', 'updated_at' => '2025-06-15 10:30:00.000000'],
+        ];
+
+        $plan = $engine->diff($incoming, $existing, $context);
+
+        self::assertCount(0, $plan->updates);
+        self::assertSame(1, $plan->unchanged);
+    }
+
+    public function testNullDateTimeOnBothSidesIsUnchanged(): void
+    {
+        $engine = new ScalarDiffEngine();
+        $metadata = $this->metadata(['updated_at']);
+        $context = new DiffContext($metadata, ['external_id']);
+        $resolver = new CompositeKeyResolver();
+
+        $key = $resolver->makeKey(['external_id' => 'A-1'], ['external_id']);
+
+        $incoming = [
+            $key => ['external_id' => 'A-1', 'updated_at' => null],
+        ];
+
+        $existing = [
+            $key => ['external_id' => 'A-1', 'updated_at' => null],
+        ];
+
+        $plan = $engine->diff($incoming, $existing, $context);
+
+        self::assertCount(0, $plan->updates);
+        self::assertSame(1, $plan->unchanged);
+    }
+
+    public function testNullIncomingVsNonNullExistingProducesUpdate(): void
+    {
+        $engine = new ScalarDiffEngine();
+        $metadata = $this->metadata(['updated_at']);
+        $context = new DiffContext($metadata, ['external_id']);
+        $resolver = new CompositeKeyResolver();
+
+        $key = $resolver->makeKey(['external_id' => 'A-1'], ['external_id']);
+
+        $incoming = [
+            $key => ['external_id' => 'A-1', 'updated_at' => null],
+        ];
+
+        $existing = [
+            $key => ['external_id' => 'A-1', 'updated_at' => '2025-01-01 00:00:00'],
+        ];
+
+        $plan = $engine->diff($incoming, $existing, $context);
+
+        self::assertCount(1, $plan->updates);
+        self::assertSame(['updated_at' => null], $plan->updates[0]->changedColumns);
+    }
+
     /**
      * @param list<string> $updatableFields
      */
