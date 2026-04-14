@@ -184,6 +184,93 @@ final class SyncPipelineSqliteTest extends TestCase
     /**
      * @throws Exception
      */
+    public function testSecondRunWithSameSourceProducesNoChanges(): void
+    {
+        $connection = DriverManager::getConnection([
+            'driver' => 'pdo_sqlite',
+            'memory' => true,
+        ]);
+        $this->createSchema($connection);
+
+        $syncForge = $this->buildSyncForge($connection);
+
+        $rows = [
+            ['external_id' => 'A-1', 'name' => 'Alpha', 'price' => 100],
+            ['external_id' => 'B-1', 'name' => 'Beta', 'price' => 200],
+            ['external_id' => 'C-1', 'name' => 'Gamma', 'price' => 300],
+        ];
+
+        $syncForge->for(SqliteProductStub::class)
+            ->key(['external_id'])
+            ->source($rows)
+            ->deleteMissing(true)
+            ->run();
+
+        $result = $syncForge->for(SqliteProductStub::class)
+            ->key(['external_id'])
+            ->source($rows)
+            ->deleteMissing(true)
+            ->run();
+
+        self::assertSame(0, $result->inserted);
+        self::assertSame(0, $result->updated);
+        self::assertSame(0, $result->deleted);
+        self::assertSame(3, $result->unchanged);
+    }
+
+    /**
+     * @throws Exception
+     */
+    public function testSyncIsStableAfterRoundTrip(): void
+    {
+        $connection = DriverManager::getConnection([
+            'driver' => 'pdo_sqlite',
+            'memory' => true,
+        ]);
+        $this->createSchema($connection);
+
+        $syncForge = $this->buildSyncForge($connection);
+
+        $original = [
+            ['external_id' => 'A-1', 'name' => 'Alpha', 'price' => 100],
+            ['external_id' => 'B-1', 'name' => 'Beta', 'price' => 200],
+        ];
+
+        $modified = [
+            ['external_id' => 'A-1', 'name' => 'Alpha changed', 'price' => 150],
+            ['external_id' => 'B-1', 'name' => 'Beta', 'price' => 200],
+            ['external_id' => 'C-1', 'name' => 'Gamma', 'price' => 300],
+        ];
+
+        $syncForge->for(SqliteProductStub::class)->key(['external_id'])->source($original)->run();
+
+        $syncForge->for(SqliteProductStub::class)->key(['external_id'])->source($modified)->deleteMissing(true)->run();
+
+        // sync back to original — should detect changes and undo them
+        $result = $syncForge->for(SqliteProductStub::class)
+            ->key(['external_id'])
+            ->source($original)
+            ->deleteMissing(true)
+            ->run();
+
+        self::assertSame(0, $result->inserted);
+        self::assertSame(1, $result->updated);
+        self::assertSame(1, $result->deleted);
+        self::assertSame(1, $result->unchanged);
+
+        $all = $connection->createQueryBuilder()
+            ->select('external_id', 'name', 'price')
+            ->from('products')
+            ->orderBy('external_id', 'ASC')
+            ->executeQuery()
+            ->fetchAllAssociative();
+
+        self::assertSame($original, $all);
+    }
+
+    /**
+     * @throws Exception
+     */
     public function testCompositeKeyWithDeleteMissing(): void
     {
         $connection = DriverManager::getConnection([
