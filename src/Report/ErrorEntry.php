@@ -6,9 +6,9 @@ namespace SyncForge\Report;
 
 final class ErrorEntry
 {
-    public const string TYPE_VALIDATION = 'validation';
-    public const string TYPE_DB = 'db';
-    public const string TYPE_PIPELINE = 'pipeline';
+    public const TYPE_VALIDATION = 'validation';
+    public const TYPE_DB = 'db';
+    public const TYPE_PIPELINE = 'pipeline';
 
     public function __construct(
         public readonly string $type,
