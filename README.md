@@ -4,7 +4,7 @@
 
 SyncForge is a Symfony/Doctrine library for reconciling external datasets (`array`/`iterable`) with an entity table using batched DBAL operations.
 
-> **Status: beta** (`v0.1.0-beta.2`). API is stable enough for integration testing.
+> **Status:** Early stable release (`v0.1.1`).
 
 Typical use case: you get data from an API, CSV, ERP or marketplace feed, and need to keep a DB table in sync - upsert changed rows, delete rows that disappeared from the source, skip what hasn't changed - all without loading 100k entities into Doctrine's UnitOfWork.
 
@@ -23,7 +23,8 @@ Typical use case: you get data from an API, CSV, ERP or marketplace feed, and ne
 
 - PHP `^8.2`
 - Doctrine DBAL `^4.2`
-- Symfony + Doctrine ORM (for bundle/autowiring)
+- Symfony 6.4, 7.x or 8.1+ (Symfony 8 requires PHP 8.4+)
+- Doctrine ORM (for bundle/autowiring)
 
 ## Installation
 
@@ -172,6 +173,7 @@ if (!$result->isSuccess()) {
 - Bypasses Doctrine lifecycle callbacks (uses DBAL directly).
 - Diff is scalar-oriented - no deep JSON comparison.
 - `deleteMissing(true)` with an empty source throws as a safety guard.
+- `deleteMissing(true)` scans the entire mapped table; scoped deletion is not yet supported.
 - No async workers or audit log yet.
 
 ## Performance Benchmark

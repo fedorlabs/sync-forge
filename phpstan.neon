@@ -9,6 +9,5 @@ parameters:
     - src
     - tests
   treatPhpDocTypesAsCertain: true
-  checkMissingIterableValueType: true
   checkUninitializedProperties: true
   reportUnmatchedIgnoredErrors: true
