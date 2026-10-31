@@ -337,7 +337,7 @@ final class SyncPipelineSqliteTest extends TestCase
 
         $syncForge->for(SqliteProductStub::class)->key(['external_id'])->source($modified)->deleteMissing(true)->run();
 
-        // sync back to original — should detect changes and undo them
+        // sync back to original - should detect changes and undo them
         $result = $syncForge->for(SqliteProductStub::class)
             ->key(['external_id'])
             ->source($original)
@@ -432,6 +432,48 @@ final class SyncPipelineSqliteTest extends TestCase
         ], $all);
     }
 
+    public function testDateTimeSourceValuesAreWrittenAsUtcStrings(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $connection->executeStatement('CREATE TABLE events (external_id VARCHAR(64) PRIMARY KEY, happened_at TEXT NULL)');
+        $metadata = new EntityMetadata(
+            SqliteEventStub::class,
+            'events',
+            ['external_id', 'happened_at'],
+            ['external_id' => 'external_id', 'happened_at' => 'happened_at'],
+            ['external_id'],
+            ['happened_at'],
+        );
+        $keyResolver = new CompositeKeyResolver();
+        $sync = new SyncForge(
+            metadataProvider: new InMemoryEntityMetadataProvider([SqliteEventStub::class => $metadata]),
+            keyResolver: $keyResolver,
+            executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
+            platformDetector: new DbalPlatformDetector($connection),
+            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+        );
+        $run = static fn (string $date) => $sync->for(SqliteEventStub::class)->key(['external_id'])
+            ->source([['external_id' => 'a', 'happened_at' => new \DateTimeImmutable($date)]])->run();
+
+        self::assertSame(1, $run('2024-01-01 12:00:00+03:00')->inserted);
+        self::assertSame('2024-01-01 09:00:00.000000', $connection->fetchOne('SELECT happened_at FROM events'));
+        self::assertSame(1, $run('2024-01-01 13:00:00+03:00')->updated);
+        self::assertSame(1, $run('2024-01-01 13:00:00+03:00')->unchanged);
+    }
+
+    public function testNonExceptionErrorIsCollectedWithContinueOnError(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $this->createSchema($connection);
+
+        $result = $this->buildSyncForge($connection)->for(SqliteProductStub::class)
+            ->key(['external_id'])->source([['external_id' => 'a', 'name' => new \stdClass(), 'price' => 1]])
+            ->continueOnError()->run();
+
+        self::assertFalse($result->isSuccess());
+        self::assertCount(1, $result->errors);
+    }
+
     private function buildSyncForge(Connection $connection): SyncForge
     {
         $metadata = new EntityMetadata(
@@ -478,5 +520,9 @@ final class SqliteProductStub
 }
 
 final class SqliteStockStub
+{
+}
+
+final class SqliteEventStub
 {
 }

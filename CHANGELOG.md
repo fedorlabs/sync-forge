@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- Write `DateTimeInterface` source values as UTC strings instead of failing on insert and update.
+- Collect non-`Exception` errors in `SyncResult` when `continueOnError` is enabled.
+- Fix a PHPStan error in the Doctrine ORM metadata provider.
+
 ## [0.2.0] - 2026-11-01
 
 ### Changed

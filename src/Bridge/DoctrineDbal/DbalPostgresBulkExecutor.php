@@ -12,6 +12,7 @@ use SyncForge\Executor\BulkExecutorInterface;
 use SyncForge\Executor\DatabasePlatformContext;
 use SyncForge\Executor\ExecutionContext;
 use SyncForge\Executor\ExecutionResult;
+use SyncForge\Executor\ParameterValue;
 
 final class DbalPostgresBulkExecutor implements BulkExecutorInterface
 {
@@ -95,7 +96,7 @@ final class DbalPostgresBulkExecutor implements BulkExecutorInterface
             foreach ($columns as $column) {
                 $param = sprintf('v_%d_%s', $rowIndex, $column);
                 $field = $this->resolveFieldByColumn($column, $context);
-                $value = $field !== null && array_key_exists($field, $row) ? $row[$field] : null;
+                $value = $field !== null && array_key_exists($field, $row) ? ParameterValue::normalize($row[$field]) : null;
 
                 $placeholders[] = ':' . $param;
                 $params[$param] = $value;
@@ -248,6 +249,7 @@ final class DbalPostgresBulkExecutor implements BulkExecutorInterface
         $types = [];
 
         foreach ($changes as $field => $value) {
+            $value = ParameterValue::normalize($value);
             $column = $context->metadata->fieldToColumn[$field] ?? null;
             if ($column === null) {
                 continue;
@@ -278,7 +280,7 @@ final class DbalPostgresBulkExecutor implements BulkExecutorInterface
                 continue;
             }
 
-            $value = $row[$keyField];
+            $value = ParameterValue::normalize($row[$keyField]);
             if ($value === null) {
                 $parts[] = sprintf('%s IS NULL', $this->quoteIdentifier($column));
                 continue;

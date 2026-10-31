@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace SyncForge\Pipeline;
 
 use DateTimeImmutable;
-use Exception;
 use SyncForge\Chunk\ChunkIterator;
 use SyncForge\Diff\DiffContext;
 use SyncForge\Diff\DiffEngineInterface;
@@ -23,6 +22,7 @@ use SyncForge\Metadata\EntityMetadataProviderInterface;
 use SyncForge\Report\ErrorEntry;
 use SyncForge\Report\SyncResult;
 use SyncForge\SyncContext;
+use Throwable;
 
 final class SyncPipeline implements SyncPipelineInterface
 {
@@ -94,7 +94,7 @@ final class SyncPipeline implements SyncPipelineInterface
                 $updated += $executionResult->updated;
                 $deleted += $executionResult->deleted;
                 $unchanged += $plan->unchanged;
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
                 }
@@ -123,7 +123,7 @@ final class SyncPipeline implements SyncPipelineInterface
                     executor: $executor,
                     context: $context,
                 );
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
                 }
@@ -221,7 +221,7 @@ final class SyncPipeline implements SyncPipelineInterface
         return $deleted;
     }
 
-    private function classifyException(\Throwable $e): string
+    private function classifyException(Throwable $e): string
     {
         if ($e instanceof InvalidConfigurationException || $e instanceof MetadataException) {
             return ErrorEntry::TYPE_VALIDATION;
