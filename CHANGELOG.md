@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- Warn about keys repeated across chunks (the last row still wins).
+
 ### Fixed
+- Read the key scan for `deleteMissing` in pages (keyset pagination) instead of one buffered result, so memory no longer grows with table size on PostgreSQL and MySQL.
 - Write `DateTimeInterface` source values as UTC strings instead of failing on insert and update.
 - Collect non-`Exception` errors in `SyncResult` when `continueOnError` is enabled.
 - Fix a PHPStan error in the Doctrine ORM metadata provider.

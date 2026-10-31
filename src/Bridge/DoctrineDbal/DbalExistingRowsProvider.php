@@ -8,7 +8,9 @@ use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
 use Doctrine\DBAL\ParameterType;
+use Doctrine\DBAL\Query\QueryBuilder;
 use SyncForge\Exception\MetadataException;
+use SyncForge\Exception\SyncExecutionException;
 use SyncForge\Key\KeyResolverInterface;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Pipeline\ExistingRowsProviderInterface;
@@ -141,7 +143,7 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
     /**
      * @throws Exception
      */
-    private function createSelectQueryBuilder(EntityMetadata $metadata): \Doctrine\DBAL\Query\QueryBuilder
+    private function createSelectQueryBuilder(EntityMetadata $metadata): QueryBuilder
     {
         $qb = $this->connection->createQueryBuilder();
         $selectColumns = [];
@@ -187,25 +189,69 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
 
         $quotedColumns = array_map(fn (string $column): string => $this->quoteIdentifier($column), $columns);
         $limit = max(1, $batchSize);
-        $qb = $this->connection->createQueryBuilder();
-        $qb->select(...$quotedColumns)->from($this->quoteIdentifier($metadata->tableName));
-        foreach ($columns as $column) {
-            $qb->addOrderBy($this->quoteIdentifier($column), 'ASC');
-        }
+        $lastRow = null;
 
-        $result = $qb->executeQuery();
-        $batch = [];
-        while (($row = $result->fetchAssociative()) !== false) {
-            $batch[] = $this->mapColumnRowToFieldRow($metadata, $row);
-            if (count($batch) === $limit) {
-                yield $batch;
-                $batch = [];
+        while (true) {
+            $qb = $this->connection->createQueryBuilder();
+            $qb->select(...$quotedColumns)
+                ->from($this->quoteIdentifier($metadata->tableName))
+                ->setMaxResults($limit);
+
+            foreach ($quotedColumns as $quotedColumn) {
+                $qb->addOrderBy($quotedColumn, 'ASC');
+            }
+
+            if ($lastRow !== null) {
+                $qb->where($this->buildKeysetCondition($qb, $columns, $quotedColumns, $lastRow));
+            }
+
+            $rawRows = $qb->executeQuery()->fetchAllAssociative();
+            if ($rawRows === []) {
+                return;
+            }
+
+            $lastRow = $rawRows[array_key_last($rawRows)];
+
+            yield array_map(fn (array $rawRow): array => $this->mapColumnRowToFieldRow($metadata, $rawRow), $rawRows);
+
+            if (count($rawRows) < $limit) {
+                return;
             }
         }
+    }
 
-        if ($batch !== []) {
-            yield $batch;
+    /**
+     * Builds "(c1 > :v1) OR (c1 = :v1 AND c2 > :v2) ..." so each page starts after the last key
+     * of the previous one and stays correct while earlier rows are being deleted.
+     *
+     * @param list<string> $columns
+     * @param list<string> $quotedColumns
+     * @param array<string,mixed> $lastRow
+     * @throws SyncExecutionException
+     */
+    private function buildKeysetCondition(QueryBuilder $qb, array $columns, array $quotedColumns, array $lastRow): string
+    {
+        $alternatives = [];
+
+        foreach ($columns as $index => $column) {
+            $value = $lastRow[$column] ?? null;
+            if ($value === null) {
+                throw new SyncExecutionException(sprintf('Key scan cannot paginate over NULL in key column "%s".', $column));
+            }
+
+            $param = sprintf('last_%d', $index);
+            $qb->setParameter($param, $value, $this->detectType($value));
+
+            $parts = [];
+            for ($prev = 0; $prev < $index; $prev++) {
+                $parts[] = sprintf('%s = :last_%d', $quotedColumns[$prev], $prev);
+            }
+            $parts[] = sprintf('%s > :%s', $quotedColumns[$index], $param);
+
+            $alternatives[] = '(' . implode(' AND ', $parts) . ')';
         }
+
+        return implode(' OR ', $alternatives);
     }
 
     /**

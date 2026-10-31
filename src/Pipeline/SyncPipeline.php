@@ -64,8 +64,15 @@ final class SyncPipeline implements SyncPipelineInterface
                 $warnings[] = sprintf('Chunk %d contains %d duplicate keys; last row wins.', $index, $incomingIndex->duplicateCount);
             }
 
+            $repeatedKeys = 0;
             foreach (array_keys($incomingIndex->rowsByKey) as $key) {
+                if (isset($incomingKeySet[$key])) {
+                    $repeatedKeys++;
+                }
                 $incomingKeySet[$key] = true;
+            }
+            if ($repeatedKeys > 0) {
+                $warnings[] = sprintf('Chunk %d repeats %d keys from earlier chunks; last row wins.', $index, $repeatedKeys);
             }
 
             try {
