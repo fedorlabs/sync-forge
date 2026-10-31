@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-01
+
+### Changed
+- Integer keys and their exact string representations now compare equally.
+- Skip `deleteMissing` after chunk errors and return a warning.
+
+### Fixed
+- Avoid skipped rows when deleting missing records across key batches.
+- Reject database matches whose keys cannot be matched to source keys.
+- Preserve values and database defaults when inserted rows have different fields.
+
 ## [0.1.2] - 2026-11-01
 
 ### Changed
@@ -25,7 +36,7 @@
 - Idempotency tests: repeated sync with same source produces zero changes
 
 ### Changed
-- `SyncResult::$errors` is now `list<ErrorEntry>` instead of `list<string>` — each error carries `type`, `message`, and `chunkIndex`
+- `SyncResult::$errors` is now `list<ErrorEntry>` instead of `list<string>` - each error carries `type`, `message`, and `chunkIndex`
 - README rewritten: shorter, paginated source example, benchmark numbers, `SyncResult` table
 
 ## [0.1.0-beta.2] - 2026-03-11

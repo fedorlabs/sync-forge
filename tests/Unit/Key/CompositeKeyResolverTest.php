@@ -93,4 +93,12 @@ final class CompositeKeyResolverTest extends TestCase
 
         self::assertNotSame($boolKey, $stringKey);
     }
+
+    public function testIntegerAndStringKeyMatchWithoutDiscardingLeadingZeros(): void
+    {
+        $resolver = new CompositeKeyResolver();
+
+        self::assertSame($resolver->makeKey(['id' => 1], ['id']), $resolver->makeKey(['id' => '1'], ['id']));
+        self::assertNotSame($resolver->makeKey(['id' => 1], ['id']), $resolver->makeKey(['id' => '001'], ['id']));
+    }
 }

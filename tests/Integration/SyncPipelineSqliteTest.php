@@ -21,6 +21,97 @@ use SyncForge\SyncForge;
 
 final class SyncPipelineSqliteTest extends TestCase
 {
+    public function testDeleteMissingScansEveryPageWhileDeleting(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $this->createSchema($connection);
+        foreach (range(1, 6) as $number) {
+            $connection->insert('products', ['external_id' => (string) $number, 'name' => 'Product', 'price' => 1]);
+        }
+
+        $result = $this->buildSyncForge($connection)->for(SqliteProductStub::class)
+            ->key(['external_id'])->source([['external_id' => '6', 'name' => 'Product', 'price' => 1]])
+            ->chunkSize(2)->deleteMissing()->run();
+
+        self::assertSame(5, $result->deleted);
+        self::assertSame(['6'], $connection->fetchFirstColumn('SELECT external_id FROM products'));
+    }
+
+    public function testCompositeKeyDeleteMissingPreservesOnlySourceRowsAcrossBatches(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $connection->executeStatement('CREATE TABLE stock (sku TEXT NOT NULL, warehouse TEXT NOT NULL, PRIMARY KEY (sku, warehouse))');
+        foreach (['A', 'B', 'C'] as $sku) {
+            foreach (['1', '2'] as $warehouse) {
+                $connection->insert('stock', ['sku' => $sku, 'warehouse' => $warehouse]);
+            }
+        }
+        $metadata = new EntityMetadata(SqliteStockStub::class, 'stock', ['sku', 'warehouse'], ['sku' => 'sku', 'warehouse' => 'warehouse'], ['sku', 'warehouse'], []);
+        $keyResolver = new CompositeKeyResolver();
+        $sync = new SyncForge(
+            metadataProvider: new InMemoryEntityMetadataProvider([SqliteStockStub::class => $metadata]),
+            keyResolver: $keyResolver,
+            executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
+            platformDetector: new DbalPlatformDetector($connection),
+            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+        );
+        $source = [['sku' => 'A', 'warehouse' => '2'], ['sku' => 'C', 'warehouse' => '1']];
+        $result = $sync->for(SqliteStockStub::class)->key(['sku', 'warehouse'])->source($source)
+            ->chunkSize(2)->deleteMissing()->run();
+
+        self::assertSame(4, $result->deleted);
+        self::assertSame($source, $connection->fetchAllAssociative('SELECT sku, warehouse FROM stock ORDER BY sku, warehouse'));
+    }
+
+    public function testDeleteMissingIsSkippedAfterFailedChunk(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $this->createSchema($connection);
+        $connection->insert('products', ['external_id' => 'keep', 'name' => 'Existing', 'price' => 1]);
+
+        $result = $this->buildSyncForge($connection)->for(SqliteProductStub::class)
+            ->key(['external_id'])->source([['external_id' => 'bad', 'name' => null, 'price' => 1]])
+            ->continueOnError()->deleteMissing()->run();
+
+        self::assertFalse($result->isSuccess());
+        self::assertCount(1, $result->errors);
+        self::assertContains('deleteMissing skipped because one or more chunks failed.', $result->warnings);
+        self::assertSame(0, $result->deleted);
+        self::assertSame(['keep'], $connection->fetchFirstColumn('SELECT external_id FROM products'));
+    }
+
+    public function testStringInputKeyMatchesIntegerDatabaseKey(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $connection->executeStatement('CREATE TABLE products (external_id INTEGER PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL)');
+        $connection->insert('products', ['external_id' => 1, 'name' => 'Old', 'price' => 1]);
+
+        $result = $this->buildSyncForge($connection)->for(SqliteProductStub::class)
+            ->key(['external_id'])->source([['external_id' => '1', 'name' => 'New', 'price' => 1]])
+            ->deleteMissing()->run();
+
+        self::assertSame(0, $result->inserted);
+        self::assertSame(1, $result->updated);
+        self::assertSame(0, $result->deleted);
+        self::assertSame('New', $connection->fetchOne('SELECT name FROM products WHERE external_id = 1'));
+    }
+
+    public function testAmbiguousDatabaseKeyFailsBeforeWritingOrDeleting(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $connection->executeStatement('CREATE TABLE products (external_id INTEGER PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL)');
+        $connection->insert('products', ['external_id' => 1, 'name' => 'Old', 'price' => 1]);
+        $connection->insert('products', ['external_id' => 2, 'name' => 'Keep', 'price' => 1]);
+
+        $result = $this->buildSyncForge($connection)->for(SqliteProductStub::class)
+            ->key(['external_id'])->source([['external_id' => '001', 'name' => 'New', 'price' => 1]])
+            ->continueOnError()->deleteMissing()->run();
+
+        self::assertFalse($result->isSuccess());
+        self::assertSame(0, $result->deleted);
+        self::assertSame(['Old', 'Keep'], $connection->fetchFirstColumn('SELECT name FROM products ORDER BY external_id'));
+    }
+
     /**
      * @throws Exception
      */

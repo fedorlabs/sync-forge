@@ -4,9 +4,15 @@
 
 SyncForge is a Symfony/Doctrine library for reconciling external datasets (`array`/`iterable`) with an entity table using batched DBAL operations.
 
-> **Status:** Early stable release (`v0.1.2`).
+> **Status:** Early stable release (`v0.2.0`).
 
 Typical use case: you get data from an API, CSV, ERP or marketplace feed, and need to keep a DB table in sync - upsert changed rows, delete rows that disappeared from the source, skip what hasn't changed - all without loading 100k entities into Doctrine's UnitOfWork.
+
+With the Doctrine ORM metadata provider, keys and source row keys are mapped
+entity field names, not database column names. For example, use `externalId`
+for an entity property mapped to `external_id`. Every row must contain every
+configured key field. Ensure those fields uniquely identify a row in the table;
+PostgreSQL `ON CONFLICT` also requires a matching unique constraint or index.
 
 ## Features
 
@@ -15,7 +21,7 @@ Typical use case: you get data from an API, CSV, ERP or marketplace feed, and ne
 - Diff detection - only changed fields go into UPDATE
 - Batch execution via DBAL
 - Platform executors: PostgreSQL, MySQL/MariaDB, fallback
-- `deleteMissing` with streamed key scan
+- `deleteMissing` with batched key processing
 - Dry-run mode
 - `continueOnError` with typed error entries in `SyncResult`
 
@@ -36,15 +42,15 @@ composer require fedorlabs/sync-forge
 
 ```php
 $result = $syncForge->for(Product::class)
-    ->key(['external_id'])
+    ->key(['externalId'])
     ->source($rows)
     ->chunkSize(1000)
-    ->deleteMissing(true)
+    ->deleteMissing(false)
     ->run();
 
 echo $result->inserted;   // new rows
 echo $result->updated;    // changed rows
-echo $result->deleted;    // rows not in source anymore
+echo $result->deleted;    // deleted rows (zero when deleteMissing is disabled)
 echo $result->unchanged;  // skipped (no diff)
 ```
 
@@ -92,7 +98,7 @@ function fetchFromApi(HttpClientInterface $client): iterable
 
         foreach ($data['items'] as $item) {
             yield [
-                'external_id' => $item['id'],
+                'externalId'  => $item['id'],
                 'name'        => $item['title'],
                 'price'       => (int) round($item['price'] * 100),
             ];
@@ -103,10 +109,10 @@ function fetchFromApi(HttpClientInterface $client): iterable
 }
 
 $result = $syncForge->for(Product::class)
-    ->key(['external_id'])
+    ->key(['externalId'])
     ->source(fetchFromApi($client))
     ->chunkSize(500)
-    ->deleteMissing(true)
+    ->deleteMissing(false)
     ->run();
 ```
 
@@ -114,7 +120,7 @@ $result = $syncForge->for(Product::class)
 
 ```php
 $result = $syncForge->for(StockLevel::class)
-    ->key(['sku', 'warehouse_code'])
+    ->key(['sku', 'warehouseCode'])
     ->source($rows)
     ->chunkSize(2000)
     ->run();
@@ -122,9 +128,13 @@ $result = $syncForge->for(StockLevel::class)
 
 ### Dry-run before delete
 
+Only enable deletion when the source is a complete snapshot of the entire table.
+Start with a dry run and inspect `deleted`, `warnings`, and `errors`. A dry run
+does not guarantee that a later run is safe: the source or database may change.
+
 ```php
 $result = $syncForge->for(Product::class)
-    ->key(['external_id'])
+    ->key(['externalId'])
     ->source($rows)
     ->deleteMissing(true)
     ->dryRun(true)
@@ -137,7 +147,7 @@ printf("would delete %d rows\n", $result->deleted);
 
 ```php
 $result = $syncForge->for(Product::class)
-    ->key(['external_id'])
+    ->key(['externalId'])
     ->source($rows)
     ->continueOnError(true)
     ->run();
@@ -146,7 +156,7 @@ if (!$result->isSuccess()) {
     foreach ($result->errors as $error) {
         // $error->type: 'validation' | 'db' | 'pipeline'
         // $error->chunkIndex: which chunk failed (null for delete-missing phase)
-        logger->error($error->type . ': ' . $error->message);
+        // Log or otherwise handle $error->type and $error->message.
     }
 }
 ```
@@ -157,9 +167,9 @@ if (!$result->isSuccess()) {
 
 | Property | Type | Description |
 |---|---|---|
-| `inserted` | `int` | rows inserted |
-| `updated` | `int` | rows updated |
-| `deleted` | `int` | rows deleted |
+| `inserted` | `int` | planned inserts executed, or planned inserts in dry-run |
+| `updated` | `int` | planned updates executed, or planned updates in dry-run |
+| `deleted` | `int` | planned deletes executed, or planned deletes in dry-run |
 | `unchanged` | `int` | rows with no diff |
 | `processedRows` | `int` | total incoming rows |
 | `chunkCount` | `int` | number of chunks processed |
@@ -170,29 +180,53 @@ if (!$result->isSuccess()) {
 
 ## Limitations
 
-- Bypasses Doctrine lifecycle callbacks (uses DBAL directly).
+- Writes use DBAL directly and bypass Doctrine's UnitOfWork, lifecycle callbacks,
+  entity listeners, and subscribers. Search indexing, timestamps, audit records,
+  and other listener-driven effects must be handled separately when needed.
+  Already managed entities may be stale; clear or refresh them before reuse.
 - Diff is scalar-oriented - no deep JSON comparison.
+- Date/time comparison normalizes supported values to UTC with second precision;
+  differences only in microseconds are not detected.
+- PostgreSQL and MySQL split inserts into consecutive groups with matching mapped
+  columns. Missing fields are omitted so database defaults can apply.
 - `deleteMissing(true)` with an empty source throws as a safety guard.
 - `deleteMissing(true)` scans the entire mapped table; scoped deletion is not yet supported.
+- An incomplete non-empty source can delete valid rows. Validate pagination and
+  source completeness before enabling deletion; a source that silently ends
+  early is indistinguishable from a complete snapshot. An exception while reading
+  the source aborts the run, but earlier chunks may already have been written.
+- With `continueOnError(true)`, deletion is skipped if a chunk fails, and the
+  result contains errors and a warning. Earlier successful batches remain written.
+- `continueOnError` catches `Exception` during chunk processing and deletion, not
+  every `Throwable`. Source iteration and some validation errors can still abort
+  the run without returning a `SyncResult`.
+- The DBAL executors use a transaction for each executed plan, including each
+  deletion batch, rather than one transaction around the complete sync. A failure
+  can leave previous batches committed unless the caller manages an outer transaction.
+- The pipeline retains incoming key signatures for the duration of a run, even
+  when deletion is disabled. Memory use therefore grows with distinct source keys.
+- Key scanning processes rows in batches from one database result. Some DBAL
+  drivers may buffer that result in memory despite the batched application API.
+- Integer keys and their exact decimal string representations compare equally;
+  leading zeros remain significant. If the database matches a key that the pipeline
+  cannot match, the chunk fails rather than treating that row as missing.
+- Duplicate keys are detected within each chunk; the last row in that chunk wins.
+  Duplicates across chunks are not reported.
+- DBAL executor counters are based on planned operations, not database affected-row
+  counts. Concurrent writes and database conflict handling can make them differ.
 - No async workers or audit log yet.
 
 ## Performance Benchmark
 
-Local numbers on a MacBook (`seed=42`, `chunk=1000`, Docker):
+The benchmark runs against dedicated PostgreSQL and MariaDB containers and
+reports runtime, process memory and operation counters. Results depend on the
+environment; measure with a representative dataset before capacity planning.
 
-```
-== postgres ==
-n=1000    time=180ms   mem_delta=2MB   ins=200   upd=200   del=200
-n=5000    time=763ms   mem_delta=4MB   ins=1000  upd=1000  del=1000
-n=10000   time=1442ms  mem_delta=2MB   ins=2000  upd=2000  del=1000
+It drops and recreates `products_bench` in the configured benchmark databases.
+The `bench:down` command removes Compose volumes. Use only disposable databases
+and verify the Docker Compose project and volume configuration first.
 
-== mariadb ==
-n=1000    time=162ms   mem_delta=0     ins=200   upd=200   del=200
-n=5000    time=999ms   mem_delta=0     ins=1000  upd=1000  del=1000
-n=10000   time=1219ms  mem_delta=0     ins=2000  upd=2000  del=1000
-```
-
-To run yourself:
+To run it:
 
 ```bash
 composer bench:up
@@ -205,6 +239,11 @@ composer bench:down
 - SQLite: no env vars needed, runs with `composer test`
 - PostgreSQL: `TEST_PG_DSN=pgsql://sync_forge:sync_forge@127.0.0.1:5432/sync_forge_test`
 - MySQL: `TEST_MYSQL_DSN=mysql://sync_forge:sync_forge@127.0.0.1:3306/sync_forge_test`
+- CI runs PostgreSQL integration on PHP 8.3 and 8.5 with PostgreSQL 16.
+
+External database tests drop and recreate a table named `products`. Use dedicated
+test databases, never a database containing application data. Missing DSNs cause
+the corresponding tests to be skipped.
 
 ```bash
 composer test-integration-external

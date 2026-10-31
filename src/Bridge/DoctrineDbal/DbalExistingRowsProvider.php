@@ -186,28 +186,25 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
         }
 
         $quotedColumns = array_map(fn (string $column): string => $this->quoteIdentifier($column), $columns);
-        $offset = 0;
         $limit = max(1, $batchSize);
+        $qb = $this->connection->createQueryBuilder();
+        $qb->select(...$quotedColumns)->from($this->quoteIdentifier($metadata->tableName));
+        foreach ($columns as $column) {
+            $qb->addOrderBy($this->quoteIdentifier($column), 'ASC');
+        }
 
-        while (true) {
-            $qb = $this->connection->createQueryBuilder();
-            $qb->select(...$quotedColumns)
-                ->from($this->quoteIdentifier($metadata->tableName))
-                ->setFirstResult($offset)
-                ->setMaxResults($limit);
-
-            foreach ($columns as $column) {
-                $qb->addOrderBy($this->quoteIdentifier($column), 'ASC');
+        $result = $qb->executeQuery();
+        $batch = [];
+        while (($row = $result->fetchAssociative()) !== false) {
+            $batch[] = $this->mapColumnRowToFieldRow($metadata, $row);
+            if (count($batch) === $limit) {
+                yield $batch;
+                $batch = [];
             }
+        }
 
-            $rawRows = $qb->executeQuery()->fetchAllAssociative();
-            if ($rawRows === []) {
-                break;
-            }
-
-            yield array_map(fn (array $rawRow): array => $this->mapColumnRowToFieldRow($metadata, $rawRow), $rawRows);
-
-            $offset += count($rawRows);
+        if ($batch !== []) {
+            yield $batch;
         }
     }
 
