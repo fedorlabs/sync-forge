@@ -126,10 +126,8 @@ final class DoctrineOrmEntityMetadataProvider implements EntityMetadataProviderI
 
     private function loadClassMetadata(string $entityClass): mixed
     {
+        // The constructor already verified that getClassMetadata() is callable.
         $callable = [$this->entityManager, 'getClassMetadata'];
-        if (!is_callable($callable)) {
-            throw new MetadataException('Entity manager does not expose getClassMetadata().');
-        }
 
         return $callable($entityClass);
     }
