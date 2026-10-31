@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-01
+
 ### Added
 - `EntityMetadata::$fieldTypes` (DBAL type names by field), filled by the Doctrine ORM provider and accepted as an optional `fieldTypes` key by `CallableEntityMetadataProvider`.
 - Warn about keys repeated across chunks (the last row still wins).
+
+### Changed
+- `DateTimeInterface` values are no longer shifted to UTC when written. Rows previously written by SyncForge in UTC are rewritten on the first sync after upgrading, because the diff now compares them in the PHP default timezone.
 
 ### Fixed
 - Read the key scan for `deleteMissing` in pages (keyset pagination) instead of one buffered result, so memory no longer grows with table size on PostgreSQL and MySQL.
