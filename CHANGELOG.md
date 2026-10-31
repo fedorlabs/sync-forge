@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-01
+
+### Changed
+- Publish the Composer package as `fedorlabs/sync-forge`.
+
 ## [0.1.1] - 2026-11-01
 
 ### Added

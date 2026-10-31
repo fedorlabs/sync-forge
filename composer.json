@@ -1,5 +1,5 @@
 {
-  "name": "sync-forge/sync-forge",
+  "name": "fedorlabs/sync-forge",
   "description": "Symfony-compatible reconciliation engine for bulk sync via DBAL",
   "keywords": ["sync", "reconciliation", "doctrine", "dbal", "symfony", "upsert"],
   "homepage": "https://github.com/fedorlabs/sync-forge",
