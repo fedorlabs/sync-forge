@@ -21,6 +21,60 @@ use SyncForge\SyncForge;
 
 final class SyncPipelinePostgresTest extends TestCase
 {
+    public function testIntegerSourceKeyMatchesStringDatabaseKey(): void
+    {
+        $connection = $this->connection;
+        self::assertNotNull($connection);
+        $connection->insert('products', ['external_id' => '1', 'name' => 'Old', 'price' => 1]);
+
+        $result = $this->buildSyncForge($connection)->for(PostgresProductStub::class)
+            ->key(['external_id'])->source([['external_id' => 1, 'name' => 'New', 'price' => 1]])
+            ->deleteMissing()->run();
+
+        self::assertSame(0, $result->inserted);
+        self::assertSame(1, $result->updated);
+        self::assertSame(0, $result->deleted);
+        self::assertSame('New', $connection->fetchOne("SELECT name FROM products WHERE external_id = '1'"));
+    }
+
+    public function testDeleteMissingAcrossMultipleBatchesMatchesDryRun(): void
+    {
+        $connection = $this->connection;
+        self::assertNotNull($connection);
+        foreach (range(1, 6) as $number) {
+            $connection->insert('products', ['external_id' => (string) $number, 'name' => 'Product', 'price' => 1]);
+        }
+        $sync = $this->buildSyncForge($connection);
+        $source = [['external_id' => '6', 'name' => 'Product', 'price' => 1]];
+        $preview = $sync->for(PostgresProductStub::class)->key(['external_id'])->source($source)
+            ->chunkSize(2)->deleteMissing()->dryRun()->run();
+        self::assertSame(['1', '2', '3', '4', '5', '6'], $connection->fetchFirstColumn('SELECT external_id FROM products ORDER BY external_id'));
+        $result = $sync->for(PostgresProductStub::class)->key(['external_id'])->source($source)
+            ->chunkSize(2)->deleteMissing()->run();
+
+        self::assertSame(5, $preview->deleted);
+        self::assertSame($preview->deleted, $result->deleted);
+        self::assertSame(['6'], $connection->fetchFirstColumn('SELECT external_id FROM products'));
+    }
+
+    public function testInsertRowsWithDifferentFieldsKeepsDefaultsAndValues(): void
+    {
+        $connection = $this->connection;
+        self::assertNotNull($connection);
+        $connection->executeStatement('ALTER TABLE products ALTER COLUMN price SET DEFAULT 42');
+
+        $result = $this->buildSyncForge($connection)->for(PostgresProductStub::class)
+            ->key(['external_id'])
+            ->source([
+                ['external_id' => 'A', 'name' => 'First'],
+                ['external_id' => 'B', 'name' => 'Second', 'price' => 99],
+                ['external_id' => 'C', 'name' => 'Third'],
+            ])->run();
+
+        self::assertSame(3, $result->inserted);
+        self::assertSame([42, 99, 42], array_map('intval', $connection->fetchFirstColumn('SELECT price FROM products ORDER BY external_id')));
+    }
+
     private ?Connection $connection = null;
 
     /**

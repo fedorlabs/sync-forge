@@ -12,7 +12,7 @@
 - Doctrine ORM metadata bridge
 - Unit and integration tests (SQLite, PostgreSQL, MySQL)
 - Idempotency and datetime edge case coverage
-- Benchmark docs
+- Benchmark harness and run instructions
 
 ## v0.1.x - maintenance
 
@@ -20,7 +20,7 @@
 - `fetchByIncomingRows` OR optimization for very large single-key chunks
 - Chunk-level transaction strategy docs
 
-## v0.2.0
+## Future Candidates
 
 - JSON-aware diff strategy (pluggable)
 - Explicit scope filter for `deleteMissing` (bound sync to a subset of rows)

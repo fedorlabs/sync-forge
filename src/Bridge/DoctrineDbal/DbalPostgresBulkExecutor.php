@@ -39,7 +39,7 @@ final class DbalPostgresBulkExecutor implements BulkExecutorInterface
         }
 
         return $this->connection->transactional(function () use ($plan, $context): ExecutionResult {
-            $inserted = $this->executeUpsertInsertBatch($plan, $context);
+            $inserted = $this->executeInsertGroups($plan, $context);
             $updated = $this->executeUpdates($plan, $context);
             $deleted = $this->executeDeletes($plan, $context);
 
@@ -50,6 +50,28 @@ final class DbalPostgresBulkExecutor implements BulkExecutorInterface
     /**
      * @throws Exception
      */
+    private function executeInsertGroups(DiffPlan $plan, ExecutionContext $context): int
+    {
+        $groups = [];
+        $lastColumns = null;
+        foreach ($plan->inserts as $row) {
+            $columns = $this->resolveColumnsFromFirstRow($row, $context);
+            sort($columns);
+            if ($lastColumns !== $columns) {
+                $groups[] = [];
+                $lastColumns = $columns;
+            }
+            $groups[array_key_last($groups)][] = $row;
+        }
+
+        $inserted = 0;
+        foreach ($groups as $rows) {
+            $inserted += $this->executeUpsertInsertBatch(new DiffPlan(inserts: $rows, updates: [], deletes: [], unchanged: 0), $context);
+        }
+
+        return $inserted;
+    }
+
     private function executeUpsertInsertBatch(DiffPlan $plan, ExecutionContext $context): int
     {
         if ($plan->inserts === []) {

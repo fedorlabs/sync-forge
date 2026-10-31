@@ -71,6 +71,11 @@ final class SyncPipeline implements SyncPipelineInterface
             try {
                 $existingRows = $this->existingRowsProvider->fetchByIncomingRows($metadata, $context->keyFields, $chunkRows);
                 $existingIndex = $this->keyResolver->indexByKey($existingRows, $context->keyFields);
+                foreach (array_keys($existingIndex->rowsByKey) as $existingKey) {
+                    if (!isset($incomingIndex->rowsByKey[$existingKey])) {
+                        throw new InvalidConfigurationException('Database key does not match the source key; normalize key values and types before syncing.');
+                    }
+                }
 
                 $plan = $this->diffEngine->diff(
                     $incomingIndex->rowsByKey,
@@ -101,7 +106,9 @@ final class SyncPipeline implements SyncPipelineInterface
             }
         }
 
-        if ($context->deleteMissing) {
+        if ($context->deleteMissing && $errors !== []) {
+            $warnings[] = 'deleteMissing skipped because one or more chunks failed.';
+        } elseif ($context->deleteMissing) {
             if ($processedRows === 0) {
                 throw new InvalidConfigurationException(
                     'deleteMissing=true with an empty source is blocked to prevent full-table deletion.',

@@ -56,7 +56,7 @@ final class CompositeKeyResolver implements KeyResolverInterface
         return match (true) {
             $value === null => 'n:null',
             is_bool($value) => 'b:' . ($value ? '1' : '0'),
-            is_int($value) => 'i:' . (string) $value,
+            is_int($value) => 's:' . (string) $value,
             is_float($value) => 'f:' . (string) $value,
             is_string($value) => 's:' . $value,
             $value instanceof \DateTimeInterface => 'd:' . $value->format(\DateTimeInterface::ATOM),
