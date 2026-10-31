@@ -4,7 +4,7 @@
 
 SyncForge is a Symfony/Doctrine library for reconciling external datasets (`array`/`iterable`) with an entity table using batched DBAL operations.
 
-> **Status:** Early stable release (`v0.1.1`).
+> **Status:** Early stable release (`v0.1.2`).
 
 Typical use case: you get data from an API, CSV, ERP or marketplace feed, and need to keep a DB table in sync - upsert changed rows, delete rows that disappeared from the source, skip what hasn't changed - all without loading 100k entities into Doctrine's UnitOfWork.
 
@@ -29,7 +29,7 @@ Typical use case: you get data from an API, CSV, ERP or marketplace feed, and ne
 ## Installation
 
 ```bash
-composer require sync-forge/sync-forge
+composer require fedorlabs/sync-forge
 ```
 
 ## Quick Start
