@@ -154,7 +154,7 @@ $result = $syncForge->for(Product::class)
 
 if (!$result->isSuccess()) {
     foreach ($result->errors as $error) {
-        // $error->type: 'validation' | 'db' | 'pipeline'
+        // $error->type: 'validation' | 'db' | 'pipeline' | 'internal'
         // $error->chunkIndex: which chunk failed (null for delete-missing phase)
         // Log or otherwise handle $error->type and $error->message.
     }
@@ -185,8 +185,14 @@ if (!$result->isSuccess()) {
   and other listener-driven effects must be handled separately when needed.
   Already managed entities may be stale; clear or refresh them before reuse.
 - Diff is scalar-oriented - no deep JSON comparison.
-- Date/time comparison normalizes supported values to UTC with second precision;
-  differences only in microseconds are not detected.
+- `DateTimeInterface` values are written the same way Doctrine ORM writes them: through the
+  DBAL type of the column (`date`, `datetime`, `datetimetz` and their immutable variants), with
+  no shift to another timezone. The Doctrine ORM metadata provider reads the types from the
+  mapping; with other metadata providers pass `fieldTypes`, otherwise `datetime_immutable` is used.
+  Naive database values are read in the PHP default timezone, as the ORM does.
+- Date/time comparison has second precision; differences only in microseconds are not detected.
+  `date` columns compare only the day, timezone-aware columns compare the instant, other columns
+  compare wall-clock time.
 - PostgreSQL and MySQL split inserts into consecutive groups with matching mapped
   columns. Missing fields are omitted so database defaults can apply.
 - `deleteMissing(true)` with an empty source throws as a safety guard.
@@ -197,21 +203,23 @@ if (!$result->isSuccess()) {
   the source aborts the run, but earlier chunks may already have been written.
 - With `continueOnError(true)`, deletion is skipped if a chunk fails, and the
   result contains errors and a warning. Earlier successful batches remain written.
-- `continueOnError` catches `Exception` during chunk processing and deletion, not
-  every `Throwable`. Source iteration and some validation errors can still abort
-  the run without returning a `SyncResult`.
+- `continueOnError` catches any `Throwable` during chunk processing and deletion.
+  Source iteration errors and upfront validation (key fields, empty source with
+  `deleteMissing`) still abort the run without returning a `SyncResult`.
 - The DBAL executors use a transaction for each executed plan, including each
   deletion batch, rather than one transaction around the complete sync. A failure
   can leave previous batches committed unless the caller manages an outer transaction.
 - The pipeline retains incoming key signatures for the duration of a run, even
   when deletion is disabled. Memory use therefore grows with distinct source keys.
-- Key scanning processes rows in batches from one database result. Some DBAL
-  drivers may buffer that result in memory despite the batched application API.
+- Key scanning reads the table in pages using keyset pagination on the key columns,
+  so a page never holds more than `chunkSize` rows. It requires non-NULL key values
+  and an index on the key columns for large tables.
 - Integer keys and their exact decimal string representations compare equally;
   leading zeros remain significant. If the database matches a key that the pipeline
   cannot match, the chunk fails rather than treating that row as missing.
-- Duplicate keys are detected within each chunk; the last row in that chunk wins.
-  Duplicates across chunks are not reported.
+- Duplicate keys within a chunk, and keys repeated from earlier chunks, produce a
+  warning; the last row wins. Detecting repeats across chunks relies on the
+  retained key set, so it adds no extra memory.
 - DBAL executor counters are based on planned operations, not database affected-row
   counts. Concurrent writes and database conflict handling can make them differ.
 - No async workers or audit log yet.

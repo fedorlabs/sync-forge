@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace SyncForge\Pipeline;
 
 use DateTimeImmutable;
-use Exception;
+use Error;
 use SyncForge\Chunk\ChunkIterator;
 use SyncForge\Diff\DiffContext;
 use SyncForge\Diff\DiffEngineInterface;
@@ -23,6 +23,7 @@ use SyncForge\Metadata\EntityMetadataProviderInterface;
 use SyncForge\Report\ErrorEntry;
 use SyncForge\Report\SyncResult;
 use SyncForge\SyncContext;
+use Throwable;
 
 final class SyncPipeline implements SyncPipelineInterface
 {
@@ -64,8 +65,15 @@ final class SyncPipeline implements SyncPipelineInterface
                 $warnings[] = sprintf('Chunk %d contains %d duplicate keys; last row wins.', $index, $incomingIndex->duplicateCount);
             }
 
+            $repeatedKeys = 0;
             foreach (array_keys($incomingIndex->rowsByKey) as $key) {
+                if (isset($incomingKeySet[$key])) {
+                    $repeatedKeys++;
+                }
                 $incomingKeySet[$key] = true;
+            }
+            if ($repeatedKeys > 0) {
+                $warnings[] = sprintf('Chunk %d repeats %d keys from earlier chunks; last row wins.', $index, $repeatedKeys);
             }
 
             try {
@@ -94,7 +102,7 @@ final class SyncPipeline implements SyncPipelineInterface
                 $updated += $executionResult->updated;
                 $deleted += $executionResult->deleted;
                 $unchanged += $plan->unchanged;
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
                 }
@@ -123,7 +131,7 @@ final class SyncPipeline implements SyncPipelineInterface
                     executor: $executor,
                     context: $context,
                 );
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
                 }
@@ -221,8 +229,12 @@ final class SyncPipeline implements SyncPipelineInterface
         return $deleted;
     }
 
-    private function classifyException(\Throwable $e): string
+    private function classifyException(Throwable $e): string
     {
+        if ($e instanceof Error) {
+            return ErrorEntry::TYPE_INTERNAL;
+        }
+
         if ($e instanceof InvalidConfigurationException || $e instanceof MetadataException) {
             return ErrorEntry::TYPE_VALIDATION;
         }

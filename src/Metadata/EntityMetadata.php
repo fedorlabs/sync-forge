@@ -13,6 +13,7 @@ final class EntityMetadata
      * @param array<string,string> $fieldToColumn
      * @param list<string> $identifierFields
      * @param list<string> $updatableFields
+     * @param array<string,string> $fieldTypes DBAL type names by field, used to convert date/time values
      */
     public function __construct(
         public readonly string $entityClass,
@@ -21,6 +22,7 @@ final class EntityMetadata
         public readonly array $fieldToColumn,
         public readonly array $identifierFields,
         public readonly array $updatableFields,
+        public readonly array $fieldTypes = [],
     ) {
         if ($fields === []) {
             throw new MetadataException('EntityMetadata fields cannot be empty.');

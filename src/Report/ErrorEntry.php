@@ -9,6 +9,7 @@ final class ErrorEntry
     public const TYPE_VALIDATION = 'validation';
     public const TYPE_DB = 'db';
     public const TYPE_PIPELINE = 'pipeline';
+    public const TYPE_INTERNAL = 'internal';
 
     public function __construct(
         public readonly string $type,

@@ -19,6 +19,7 @@ use SyncForge\Key\CompositeKeyResolver;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Metadata\InMemoryEntityMetadataProvider;
 use SyncForge\Pipeline\ExistingRowsProviderInterface;
+use SyncForge\Pipeline\NullExistingRowsProvider;
 use SyncForge\Pipeline\StreamedExistingKeysProviderInterface;
 use SyncForge\Pipeline\SyncPipeline;
 use SyncForge\Report\ErrorEntry;
@@ -69,6 +70,33 @@ final class SyncPipelineTest extends TestCase
         self::assertSame(0, $result->unchanged);
         self::assertCount(1, $result->warnings);
         self::assertStringContainsString('duplicate keys', $result->warnings[0]);
+    }
+
+    public function testRunWarnsAboutKeysRepeatedAcrossChunks(): void
+    {
+        $pipeline = new SyncPipeline(
+            metadataProvider: new InMemoryEntityMetadataProvider([EntityStub::class => $this->metadata()]),
+            keyResolver: new CompositeKeyResolver(),
+            diffEngine: new ScalarDiffEngine(),
+            executorFactory: new BulkExecutorFactory([new FallbackBatchExecutor()]),
+            platformDetector: new StaticPlatformDetector(new DatabasePlatformContext('fallback')),
+            existingRowsProvider: new NullExistingRowsProvider(),
+        );
+
+        $result = $pipeline->run(new SyncContext(
+            entityClass: EntityStub::class,
+            keyFields: ['external_id'],
+            source: [
+                ['external_id' => 'A-1', 'name' => 'Alpha 1'],
+                ['external_id' => 'B-1', 'name' => 'Beta'],
+                ['external_id' => 'A-1', 'name' => 'Alpha 2'],
+            ],
+            chunkSize: 2,
+            deleteMissing: false,
+            dryRun: true,
+        ));
+
+        self::assertSame(['Chunk 1 repeats 1 keys from earlier chunks; last row wins.'], $result->warnings);
     }
 
     public function testDeleteMissingBuildsDeletePlan(): void

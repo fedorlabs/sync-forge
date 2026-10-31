@@ -7,6 +7,8 @@ namespace SyncForge\Diff;
 use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
+use Doctrine\DBAL\Types\Types;
+use Exception;
 
 final class ScalarDiffEngine implements DiffEngineInterface
 {
@@ -59,8 +61,9 @@ final class ScalarDiffEngine implements DiffEngineInterface
                 continue;
             }
 
-            $incoming = $this->normalize($incomingRow[$field]);
-            $existing = $this->normalize($existingRow[$field] ?? null);
+            $type = $context->metadata->fieldTypes[$field] ?? null;
+            $incoming = $this->normalize($incomingRow[$field], $type);
+            $existing = $this->normalize($existingRow[$field] ?? null, $type);
 
             if ($incoming !== $existing) {
                 $changes[$field] = $incomingRow[$field];
@@ -70,16 +73,14 @@ final class ScalarDiffEngine implements DiffEngineInterface
         return $changes;
     }
 
-    private function normalize(mixed $value): mixed
+    private function normalize(mixed $value, ?string $type): mixed
     {
         if ($value instanceof DateTimeInterface) {
-            return DateTimeImmutable::createFromInterface($value)
-                ->setTimezone(new DateTimeZone('UTC'))
-                ->format('Y-m-d\TH:i:sP');
+            return $this->normalizeDateTime($value, $type);
         }
 
         if (is_string($value)) {
-            $normalized = $this->normalizeDateString($value);
+            $normalized = $this->normalizeDateString($value, $type);
             if ($normalized !== null) {
                 return $normalized;
             }
@@ -88,29 +89,47 @@ final class ScalarDiffEngine implements DiffEngineInterface
         return $value;
     }
 
-    private function normalizeDateString(string $value): ?string
+    /**
+     * Mirrors what the executors write: date columns keep only the date, timezone-aware columns keep the instant,
+     * and other columns keep the wall-clock time of the value, which the database later returns in the PHP timezone.
+     */
+    private function normalizeDateTime(DateTimeInterface $value, ?string $type): string
+    {
+        if ($this->isDateType($type)) {
+            return $value->format('Y-m-d');
+        }
+
+        $immutable = DateTimeImmutable::createFromInterface($value);
+        if ($this->isTimezoneAwareType($type)) {
+            return $this->formatInstant($immutable);
+        }
+
+        $wallClock = DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s',
+            $immutable->format('Y-m-d H:i:s'),
+            new DateTimeZone(date_default_timezone_get()),
+        );
+
+        return $this->formatInstant($wallClock instanceof DateTimeImmutable ? $wallClock : $immutable);
+    }
+
+    private function normalizeDateString(string $value, ?string $type): ?string
     {
         if (preg_match('/^\d{4}-\d{2}-\d{2}/', $value) !== 1) {
             return null;
         }
 
-        $hasTimezone = preg_match('/(Z|[+\-]\d{2}:\d{2})$/', $value) === 1;
-        $utc = new DateTimeZone('UTC');
+        if ($this->isDateType($type)) {
+            return substr($value, 0, 10);
+        }
 
+        $hasTimezone = preg_match('/\d{2}:\d{2}(:\d{2}(\.\d+)?)?\s*(Z|[+\-]\d{2}(:?\d{2})?)$/', $value) === 1;
         if ($hasTimezone) {
-            $formats = [
-                DateTimeInterface::ATOM,
-                'Y-m-d\TH:i:s.uP',
-            ];
-
-            foreach ($formats as $format) {
-                $dt = DateTimeImmutable::createFromFormat($format, $value);
-                if ($dt instanceof DateTimeImmutable) {
-                    return $dt->setTimezone($utc)->format('Y-m-d\TH:i:sP');
-                }
+            try {
+                return $this->formatInstant(new DateTimeImmutable($value));
+            } catch (Exception) {
+                return null;
             }
-
-            return null;
         }
 
         $formats = [
@@ -119,14 +138,30 @@ final class ScalarDiffEngine implements DiffEngineInterface
             '!Y-m-d\TH:i:s',
             '!Y-m-d\TH:i:s.u',
         ];
+        $phpTimezone = new DateTimeZone(date_default_timezone_get());
 
         foreach ($formats as $format) {
-            $dt = DateTimeImmutable::createFromFormat($format, $value, $utc);
+            $dt = DateTimeImmutable::createFromFormat($format, $value, $phpTimezone);
             if ($dt instanceof DateTimeImmutable) {
-                return $dt->format('Y-m-d\TH:i:sP');
+                return $this->formatInstant($dt);
             }
         }
 
         return null;
+    }
+
+    private function formatInstant(DateTimeImmutable $value): string
+    {
+        return $value->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\TH:i:sP');
+    }
+
+    private function isDateType(?string $type): bool
+    {
+        return $type === Types::DATE_MUTABLE || $type === Types::DATE_IMMUTABLE;
+    }
+
+    private function isTimezoneAwareType(?string $type): bool
+    {
+        return $type === Types::DATETIMETZ_MUTABLE || $type === Types::DATETIMETZ_IMMUTABLE;
     }
 }

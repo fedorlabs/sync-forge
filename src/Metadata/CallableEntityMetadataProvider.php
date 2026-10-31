@@ -11,7 +11,7 @@ final class CallableEntityMetadataProvider implements EntityMetadataProviderInte
 {
     /**
      * Callable must return an array with keys:
-     * tableName, fields, fieldToColumn, identifierFields, updatableFields
+     * tableName, fields, fieldToColumn, identifierFields, updatableFields (optional: fieldTypes)
      *
      * @var Closure(string):array<string,mixed>
      */
@@ -49,6 +49,7 @@ final class CallableEntityMetadataProvider implements EntityMetadataProviderInte
             fieldToColumn: $raw['fieldToColumn'],
             identifierFields: array_values($raw['identifierFields']),
             updatableFields: array_values($raw['updatableFields']),
+            fieldTypes: $raw['fieldTypes'] ?? [],
         );
 
         $this->cache[$entityClass] = $metadata;
