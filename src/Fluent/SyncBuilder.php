@@ -27,7 +27,7 @@ final class SyncBuilder
     }
 
     /**
-     * @param list<string> $fields
+     * @param array<int, string> $fields
      */
     public function key(array $fields): self
     {

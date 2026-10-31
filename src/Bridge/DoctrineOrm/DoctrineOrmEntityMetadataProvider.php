@@ -16,7 +16,7 @@ final class DoctrineOrmEntityMetadataProvider implements EntityMetadataProviderI
     public function __construct(
         private readonly object $entityManager,
     ) {
-        if (!method_exists($this->entityManager, 'getClassMetadata')) {
+        if (!is_callable([$this->entityManager, 'getClassMetadata'])) {
             throw new MetadataException(
                 'DoctrineOrmEntityMetadataProvider expects an entity manager-like object with getClassMetadata().',
             );
@@ -127,10 +127,6 @@ final class DoctrineOrmEntityMetadataProvider implements EntityMetadataProviderI
     private function loadClassMetadata(string $entityClass): mixed
     {
         $callable = [$this->entityManager, 'getClassMetadata'];
-        if (!is_callable($callable)) {
-            throw new MetadataException('Entity manager does not provide a callable getClassMetadata method.');
-        }
-
         return \Closure::fromCallable($callable)($entityClass);
     }
 }

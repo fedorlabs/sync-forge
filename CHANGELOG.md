@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-01
+
+### Added
+- Symfony 8.1 compatibility and CI coverage for PHP 8.4 and 8.5.
+
+### Changed
+- Upgrade PHPStan and its rule extensions to version 2.
+
+### Fixed
+- Restore PHP 8.2 compatibility by removing typed class constants from `ErrorEntry`.
+
 ## [0.1.0] - 2026-04-14
 
 ### Added
