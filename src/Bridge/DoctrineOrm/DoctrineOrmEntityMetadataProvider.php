@@ -36,6 +36,7 @@ final class DoctrineOrmEntityMetadataProvider implements EntityMetadataProviderI
 
         $fields = [];
         $fieldToColumn = [];
+        $fieldTypes = [];
 
         /** @var array<string,mixed> $fieldMappings */
         $fieldMappings = is_array($doctrine->fieldMappings ?? null) ? $doctrine->fieldMappings : [];
@@ -50,6 +51,13 @@ final class DoctrineOrmEntityMetadataProvider implements EntityMetadataProviderI
 
             $fields[] = $field;
             $fieldToColumn[$field] = $columnName;
+
+            $type = is_object($mapping) && is_string($mapping->type ?? null)
+                ? $mapping->type
+                : (is_array($mapping) && is_string($mapping['type'] ?? null) ? $mapping['type'] : null);
+            if ($type !== null && $type !== '') {
+                $fieldTypes[$field] = $type;
+            }
         }
 
         /** @var array<string,mixed> $associationMappings */
@@ -117,6 +125,7 @@ final class DoctrineOrmEntityMetadataProvider implements EntityMetadataProviderI
             fieldToColumn: $fieldToColumn,
             identifierFields: $identifierFields,
             updatableFields: $updatableFields,
+            fieldTypes: $fieldTypes,
         );
 
         $this->cache[$entityClass] = $metadata;

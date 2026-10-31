@@ -94,7 +94,7 @@ final class DbalFallbackBatchExecutor implements BulkExecutorInterface
             if ($column === null) {
                 continue;
             }
-            $payload[$column] = ParameterValue::normalize($value);
+            $payload[$column] = ParameterValue::normalize($value, $this->connection->getDatabasePlatform(), $context->metadata->fieldTypes[$field] ?? null);
         }
 
         return $payload;
@@ -116,7 +116,7 @@ final class DbalFallbackBatchExecutor implements BulkExecutorInterface
             if ($column === null) {
                 continue;
             }
-            $criteria[$column] = ParameterValue::normalize($row[$field]);
+            $criteria[$column] = ParameterValue::normalize($row[$field], $this->connection->getDatabasePlatform(), $context->metadata->fieldTypes[$field] ?? null);
         }
 
         return $criteria;

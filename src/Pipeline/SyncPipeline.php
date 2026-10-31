@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SyncForge\Pipeline;
 
 use DateTimeImmutable;
+use Error;
 use SyncForge\Chunk\ChunkIterator;
 use SyncForge\Diff\DiffContext;
 use SyncForge\Diff\DiffEngineInterface;
@@ -230,6 +231,10 @@ final class SyncPipeline implements SyncPipelineInterface
 
     private function classifyException(Throwable $e): string
     {
+        if ($e instanceof Error) {
+            return ErrorEntry::TYPE_INTERNAL;
+        }
+
         if ($e instanceof InvalidConfigurationException || $e instanceof MetadataException) {
             return ErrorEntry::TYPE_VALIDATION;
         }

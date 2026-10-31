@@ -17,6 +17,7 @@ use SyncForge\Executor\BulkExecutorFactory;
 use SyncForge\Key\CompositeKeyResolver;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Metadata\InMemoryEntityMetadataProvider;
+use SyncForge\Report\ErrorEntry;
 use SyncForge\SyncForge;
 
 final class SyncPipelineSqliteTest extends TestCase
@@ -432,33 +433,51 @@ final class SyncPipelineSqliteTest extends TestCase
         ], $all);
     }
 
-    public function testDateTimeSourceValuesAreWrittenAsUtcStrings(): void
+    public function testDateTimeSourceValuesAreWrittenLikeDoctrineOrm(): void
     {
-        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
-        $connection->executeStatement('CREATE TABLE events (external_id VARCHAR(64) PRIMARY KEY, happened_at TEXT NULL)');
-        $metadata = new EntityMetadata(
-            SqliteEventStub::class,
-            'events',
-            ['external_id', 'happened_at'],
-            ['external_id' => 'external_id', 'happened_at' => 'happened_at'],
-            ['external_id'],
-            ['happened_at'],
-        );
-        $keyResolver = new CompositeKeyResolver();
-        $sync = new SyncForge(
-            metadataProvider: new InMemoryEntityMetadataProvider([SqliteEventStub::class => $metadata]),
-            keyResolver: $keyResolver,
-            executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
-            platformDetector: new DbalPlatformDetector($connection),
-            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
-        );
-        $run = static fn (string $date) => $sync->for(SqliteEventStub::class)->key(['external_id'])
-            ->source([['external_id' => 'a', 'happened_at' => new \DateTimeImmutable($date)]])->run();
+        $previous = date_default_timezone_get();
+        date_default_timezone_set('Europe/Amsterdam');
 
-        self::assertSame(1, $run('2024-01-01 12:00:00+03:00')->inserted);
-        self::assertSame('2024-01-01 09:00:00.000000', $connection->fetchOne('SELECT happened_at FROM events'));
-        self::assertSame(1, $run('2024-01-01 13:00:00+03:00')->updated);
-        self::assertSame(1, $run('2024-01-01 13:00:00+03:00')->unchanged);
+        try {
+            $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+            $connection->executeStatement('CREATE TABLE events (external_id VARCHAR(64) PRIMARY KEY, happened_at TEXT NULL, day TEXT NULL, seen_at TEXT NULL)');
+            $metadata = new EntityMetadata(
+                SqliteEventStub::class,
+                'events',
+                ['external_id', 'happened_at', 'day', 'seen_at'],
+                ['external_id' => 'external_id', 'happened_at' => 'happened_at', 'day' => 'day', 'seen_at' => 'seen_at'],
+                ['external_id'],
+                ['happened_at', 'day', 'seen_at'],
+                ['happened_at' => 'datetime_immutable', 'day' => 'date_immutable', 'seen_at' => 'datetimetz_immutable'],
+            );
+            $keyResolver = new CompositeKeyResolver();
+            $sync = new SyncForge(
+                metadataProvider: new InMemoryEntityMetadataProvider([SqliteEventStub::class => $metadata]),
+                keyResolver: $keyResolver,
+                executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
+                platformDetector: new DbalPlatformDetector($connection),
+                existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+            );
+            $amsterdam = new \DateTimeZone('Europe/Amsterdam');
+            $run = static fn (string $local) => $sync->for(SqliteEventStub::class)->key(['external_id'])
+                ->source([[
+                    'external_id' => 'a',
+                    'happened_at' => new \DateTimeImmutable($local, $amsterdam),
+                    'day' => new \DateTimeImmutable($local, $amsterdam),
+                    'seen_at' => new \DateTimeImmutable($local, $amsterdam),
+                ]])->run();
+
+            self::assertSame(1, $run('2024-06-01 00:30:00')->inserted);
+            self::assertSame(
+                ['happened_at' => '2024-06-01 00:30:00', 'day' => '2024-06-01', 'seen_at' => '2024-06-01 00:30:00'],
+                $connection->fetchAssociative('SELECT happened_at, day, seen_at FROM events'),
+            );
+            self::assertSame(1, $run('2024-06-01 00:30:00')->unchanged);
+            self::assertSame(1, $run('2024-06-01 13:00:00')->updated);
+            self::assertSame(1, $run('2024-06-01 13:00:00')->unchanged);
+        } finally {
+            date_default_timezone_set($previous);
+        }
     }
 
     public function testNonExceptionErrorIsCollectedWithContinueOnError(): void
@@ -472,6 +491,7 @@ final class SyncPipelineSqliteTest extends TestCase
 
         self::assertFalse($result->isSuccess());
         self::assertCount(1, $result->errors);
+        self::assertSame(ErrorEntry::TYPE_INTERNAL, $result->errors[0]->type);
     }
 
     private function buildSyncForge(Connection $connection): SyncForge

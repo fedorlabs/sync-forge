@@ -7,6 +7,7 @@ namespace SyncForge\Tests\Unit\Diff;
 use JsonException;
 use PHPUnit\Framework\TestCase;
 use SyncForge\Diff\DiffContext;
+use SyncForge\Diff\DiffPlan;
 use SyncForge\Diff\ScalarDiffEngine;
 use SyncForge\Key\CompositeKeyResolver;
 use SyncForge\Metadata\EntityMetadata;
@@ -123,28 +124,68 @@ final class ScalarDiffEngineTest extends TestCase
         self::assertSame(1, $plan->unchanged);
     }
 
-    public function testSameUtcMomentInDifferentTimezonesIsUnchanged(): void
+    public function testSameInstantInDifferentTimezonesIsUnchangedForTimezoneAwareColumn(): void
     {
-        $engine = new ScalarDiffEngine();
-        $metadata = $this->metadata(['updated_at']);
-        $context = new DiffContext($metadata, ['external_id']);
-        $resolver = new CompositeKeyResolver();
-
-        $key = $resolver->makeKey(['external_id' => 'A-1'], ['external_id']);
-
-        // 2025-01-01 03:00 UTC+3 == 2025-01-01 00:00 UTC
-        $incoming = [
-            $key => ['external_id' => 'A-1', 'updated_at' => new \DateTimeImmutable('2025-01-01T03:00:00+03:00')],
-        ];
-
-        $existing = [
-            $key => ['external_id' => 'A-1', 'updated_at' => '2025-01-01 00:00:00'],
-        ];
-
-        $plan = $engine->diff($incoming, $existing, $context);
+        $plan = $this->diffOne(
+            ['updated_at' => new \DateTimeImmutable('2025-01-01T03:00:00+03:00')],
+            ['updated_at' => '2025-01-01 00:00:00+00'],
+            ['updated_at' => 'datetimetz_immutable'],
+        );
 
         self::assertCount(0, $plan->updates);
         self::assertSame(1, $plan->unchanged);
+    }
+
+    public function testNaiveColumnComparesWallClockInPhpTimezone(): void
+    {
+        $previous = date_default_timezone_get();
+        date_default_timezone_set('Europe/Amsterdam');
+
+        try {
+            $same = $this->diffOne(
+                ['updated_at' => new \DateTimeImmutable('2025-06-01 12:00:00', new \DateTimeZone('Europe/Amsterdam'))],
+                ['updated_at' => '2025-06-01 12:00:00'],
+                ['updated_at' => 'datetime_immutable'],
+            );
+            $shifted = $this->diffOne(
+                ['updated_at' => new \DateTimeImmutable('2025-06-01 12:00:00', new \DateTimeZone('Europe/Amsterdam'))],
+                ['updated_at' => '2025-06-01 10:00:00'],
+                ['updated_at' => 'datetime_immutable'],
+            );
+        } finally {
+            date_default_timezone_set($previous);
+        }
+
+        self::assertSame(1, $same->unchanged);
+        self::assertCount(1, $shifted->updates);
+    }
+
+    public function testDateColumnComparesOnlyTheDay(): void
+    {
+        $plan = $this->diffOne(
+            ['updated_at' => new \DateTimeImmutable('2025-06-01 00:00:00', new \DateTimeZone('Europe/Amsterdam'))],
+            ['updated_at' => '2025-06-01'],
+            ['updated_at' => 'date_immutable'],
+        );
+
+        self::assertSame(1, $plan->unchanged);
+    }
+
+    /**
+     * @param array<string,mixed> $incomingFields
+     * @param array<string,mixed> $existingFields
+     * @param array<string,string> $fieldTypes
+     */
+    private function diffOne(array $incomingFields, array $existingFields, array $fieldTypes): DiffPlan
+    {
+        $context = new DiffContext($this->metadata(['updated_at'], $fieldTypes), ['external_id']);
+        $key = (new CompositeKeyResolver())->makeKey(['external_id' => 'A-1'], ['external_id']);
+
+        return (new ScalarDiffEngine())->diff(
+            [$key => ['external_id' => 'A-1', ...$incomingFields]],
+            [$key => ['external_id' => 'A-1', ...$existingFields]],
+            $context,
+        );
     }
 
     public function testDateTimeStringWithMicrosecondsIsUnchanged(): void
@@ -218,8 +259,9 @@ final class ScalarDiffEngineTest extends TestCase
 
     /**
      * @param list<string> $updatableFields
+     * @param array<string,string> $fieldTypes
      */
-    private function metadata(array $updatableFields): EntityMetadata
+    private function metadata(array $updatableFields, array $fieldTypes = []): EntityMetadata
     {
         return new EntityMetadata(
             entityClass: ProductStub::class,
@@ -234,6 +276,7 @@ final class ScalarDiffEngineTest extends TestCase
             ],
             identifierFields: ['external_id'],
             updatableFields: $updatableFields,
+            fieldTypes: $fieldTypes,
         );
     }
 }

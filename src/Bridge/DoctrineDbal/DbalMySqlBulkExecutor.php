@@ -96,7 +96,7 @@ final class DbalMySqlBulkExecutor implements BulkExecutorInterface
             foreach ($columns as $column) {
                 $param = sprintf('v_%d_%s', $rowIndex, $column);
                 $field = $this->resolveFieldByColumn($column, $context);
-                $value = $field !== null && array_key_exists($field, $row) ? ParameterValue::normalize($row[$field]) : null;
+                $value = $field !== null && array_key_exists($field, $row) ? ParameterValue::normalize($row[$field], $this->connection->getDatabasePlatform(), $context->metadata->fieldTypes[$field] ?? null) : null;
 
                 $placeholders[] = ':' . $param;
                 $params[$param] = $value;
@@ -246,7 +246,7 @@ final class DbalMySqlBulkExecutor implements BulkExecutorInterface
         $types = [];
 
         foreach ($changes as $field => $value) {
-            $value = ParameterValue::normalize($value);
+            $value = ParameterValue::normalize($value, $this->connection->getDatabasePlatform(), $context->metadata->fieldTypes[$field] ?? null);
             $column = $context->metadata->fieldToColumn[$field] ?? null;
             if ($column === null) {
                 continue;
@@ -277,7 +277,7 @@ final class DbalMySqlBulkExecutor implements BulkExecutorInterface
                 continue;
             }
 
-            $value = ParameterValue::normalize($row[$keyField]);
+            $value = ParameterValue::normalize($row[$keyField], $this->connection->getDatabasePlatform(), $context->metadata->fieldTypes[$keyField] ?? null);
             if ($value === null) {
                 $parts[] = sprintf('%s IS NULL', $this->quoteIdentifier($column));
                 continue;

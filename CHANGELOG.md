@@ -3,12 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- `EntityMetadata::$fieldTypes` (DBAL type names by field), filled by the Doctrine ORM provider and accepted as an optional `fieldTypes` key by `CallableEntityMetadataProvider`.
 - Warn about keys repeated across chunks (the last row still wins).
 
 ### Fixed
 - Read the key scan for `deleteMissing` in pages (keyset pagination) instead of one buffered result, so memory no longer grows with table size on PostgreSQL and MySQL.
-- Write `DateTimeInterface` source values as UTC strings instead of failing on insert and update.
-- Collect non-`Exception` errors in `SyncResult` when `continueOnError` is enabled.
+- Write `DateTimeInterface` source values through the DBAL type of the column, as Doctrine ORM does, instead of failing on insert and update. No timezone shift is applied; `date` columns keep the day and `datetimetz` columns keep the instant.
+- Read naive database date-times in the PHP default timezone when diffing, so values written by the ORM and by SyncForge compare equal.
+- Collect non-`Exception` errors in `SyncResult` when `continueOnError` is enabled; `Error` throwables are reported with the separate `internal` error type.
 - Fix a PHPStan error in the Doctrine ORM metadata provider.
 
 ## [0.2.0] - 2026-11-01

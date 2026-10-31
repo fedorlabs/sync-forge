@@ -154,7 +154,7 @@ $result = $syncForge->for(Product::class)
 
 if (!$result->isSuccess()) {
     foreach ($result->errors as $error) {
-        // $error->type: 'validation' | 'db' | 'pipeline'
+        // $error->type: 'validation' | 'db' | 'pipeline' | 'internal'
         // $error->chunkIndex: which chunk failed (null for delete-missing phase)
         // Log or otherwise handle $error->type and $error->message.
     }
@@ -185,8 +185,14 @@ if (!$result->isSuccess()) {
   and other listener-driven effects must be handled separately when needed.
   Already managed entities may be stale; clear or refresh them before reuse.
 - Diff is scalar-oriented - no deep JSON comparison.
-- Date/time comparison normalizes supported values to UTC with second precision;
-  differences only in microseconds are not detected.
+- `DateTimeInterface` values are written the same way Doctrine ORM writes them: through the
+  DBAL type of the column (`date`, `datetime`, `datetimetz` and their immutable variants), with
+  no shift to another timezone. The Doctrine ORM metadata provider reads the types from the
+  mapping; with other metadata providers pass `fieldTypes`, otherwise `datetime_immutable` is used.
+  Naive database values are read in the PHP default timezone, as the ORM does.
+- Date/time comparison has second precision; differences only in microseconds are not detected.
+  `date` columns compare only the day, timezone-aware columns compare the instant, other columns
+  compare wall-clock time.
 - PostgreSQL and MySQL split inserts into consecutive groups with matching mapped
   columns. Missing fields are omitted so database defaults can apply.
 - `deleteMissing(true)` with an empty source throws as a safety guard.
