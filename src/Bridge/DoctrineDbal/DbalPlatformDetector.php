@@ -31,6 +31,6 @@ final class DbalPlatformDetector implements PlatformDetectorInterface
             default => 'fallback',
         };
 
-        return new DatabasePlatformContext($name);
+        return new DatabasePlatformContext($name, $this->connection->getDatabasePlatform());
     }
 }

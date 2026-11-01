@@ -43,7 +43,8 @@ final class SyncPipeline implements SyncPipelineInterface
         $metadata = $this->metadataProvider->get($context->entityClass);
         $this->validateKeyFields($metadata, $context->keyFields);
 
-        $executor = $this->executorFactory->forPlatform($this->platformDetector->detect());
+        $platformContext = $this->platformDetector->detect();
+        $executor = $this->executorFactory->forPlatform($platformContext);
 
         $processedRows = 0;
         $inserted = 0;
@@ -88,7 +89,7 @@ final class SyncPipeline implements SyncPipelineInterface
                 $plan = $this->diffEngine->diff(
                     $incomingIndex->rowsByKey,
                     $existingIndex->rowsByKey,
-                    new DiffContext($metadata, $context->keyFields),
+                    new DiffContext($metadata, $context->keyFields, $platformContext->platform),
                 );
 
                 $executionResult = $executor->execute($plan, new ExecutionContext(

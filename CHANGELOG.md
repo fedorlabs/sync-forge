@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- Objects and arrays are converted through the DBAL type named in `EntityMetadata::$fieldTypes`, not only dates, so custom types such as money and `json` columns work. `BackedEnum` values are written as their backing value. Custom DBAL types also own the conversion of `DateTimeInterface` values.
+- The diff compares converted values with the raw database value (`json` structurally, other scalars as strings). `DatabasePlatformContext` and `DiffContext` carry the optional DBAL platform for this.
+
 ## [0.2.1] - 2026-11-01
 
 ### Added
