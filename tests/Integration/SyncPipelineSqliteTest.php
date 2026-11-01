@@ -635,6 +635,10 @@ final class SqliteStockStub
 {
 }
 
+final class SqliteItemStub
+{
+}
+
 final class SqliteScopedPriceStub
 {
 }

@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace SyncForge\Diff;
 
+use BackedEnum;
 use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
+use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use Exception;
+use SyncForge\Executor\ParameterValue;
 
 final class ScalarDiffEngine implements DiffEngineInterface
 {
@@ -62,8 +65,27 @@ final class ScalarDiffEngine implements DiffEngineInterface
             }
 
             $type = $context->metadata->fieldTypes[$field] ?? null;
-            $incoming = $this->normalize($incomingRow[$field], $type);
-            $existing = $this->normalize($existingRow[$field] ?? null, $type);
+            $incomingValue = $incomingRow[$field];
+            $existingValue = $existingRow[$field] ?? null;
+            if ($incomingValue instanceof BackedEnum) {
+                $incomingValue = $incomingValue->value;
+            }
+
+            if ($this->needsTypeConversion($incomingValue, $type, $context)) {
+                \assert($context->platform !== null && $type !== null);
+                [$incoming, $existing] = $this->normalizeConverted(
+                    ParameterValue::normalize($incomingValue, $context->platform, $type),
+                    $existingValue,
+                    $type,
+                );
+            } else {
+                $incoming = $this->normalize($incomingValue, $type);
+                $existing = $this->normalize($existingValue, $type);
+                if ($type === Types::JSON && is_string($incoming) && is_string($existing)) {
+                    $incoming = $this->canonicalJson($incoming);
+                    $existing = $this->canonicalJson($existing);
+                }
+            }
 
             if ($incoming !== $existing) {
                 $changes[$field] = $incomingRow[$field];
@@ -71,6 +93,61 @@ final class ScalarDiffEngine implements DiffEngineInterface
         }
 
         return $changes;
+    }
+
+    private function needsTypeConversion(mixed $value, ?string $type, DiffContext $context): bool
+    {
+        return (is_array($value) || (is_object($value) && !$value instanceof DateTimeInterface))
+            && $type !== null
+            && $context->platform !== null
+            && Type::hasType($type);
+    }
+
+    /**
+     * The incoming value is already in database form; the existing one is the raw database value.
+     * JSON is compared structurally, other scalars as strings because drivers return numbers as strings.
+     *
+     * @return array{mixed,mixed}
+     */
+    private function normalizeConverted(mixed $converted, mixed $existing, string $type): array
+    {
+        if ($type === Types::JSON && is_string($converted) && is_string($existing)) {
+            return [$this->canonicalJson($converted), $this->canonicalJson($existing)];
+        }
+
+        if (is_scalar($converted) && is_scalar($existing)) {
+            return [(string) $converted, (string) $existing];
+        }
+
+        return [$converted, $existing];
+    }
+
+    /**
+     * Re-encodes JSON with sorted object keys, so key order and whitespace do not cause false updates.
+     */
+    private function canonicalJson(string $json): string
+    {
+        try {
+            $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return $json;
+        }
+
+        return json_encode($this->sortKeys($decoded), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+
+    private function sortKeys(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        $sorted = array_map(fn (mixed $item): mixed => $this->sortKeys($item), $value);
+        if (!array_is_list($sorted)) {
+            ksort($sorted);
+        }
+
+        return $sorted;
     }
 
     private function normalize(mixed $value, ?string $type): mixed

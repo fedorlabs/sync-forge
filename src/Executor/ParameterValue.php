@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace SyncForge\Executor;
 
+use BackedEnum;
 use DateTimeInterface;
 use Doctrine\DBAL\Platforms\AbstractPlatform;
 use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
+use ReflectionClass;
 
 final class ParameterValue
 {
@@ -23,19 +25,40 @@ final class ParameterValue
     ];
 
     /**
-     * Converts DateTimeInterface values the way Doctrine ORM does: through the DBAL type of the column,
-     * without shifting the value to another timezone. Other values are returned unchanged.
+     * Converts a PHP value to its database representation the way Doctrine ORM does, through the DBAL type of the
+     * column and without shifting dates to another timezone. Scalars and null are written as they are, so values
+     * that already are in database form (for example a JSON string) are not converted twice.
      */
     public static function normalize(mixed $value, AbstractPlatform $platform, ?string $dbalType = null): mixed
     {
-        if (!$value instanceof DateTimeInterface) {
-            return $value;
+        if ($value instanceof BackedEnum) {
+            return $value->value;
         }
 
-        $typeName = $dbalType !== null && in_array($dbalType, self::DATE_TIME_TYPES, true)
-            ? $dbalType
-            : Types::DATETIME_IMMUTABLE;
+        if ($value instanceof DateTimeInterface) {
+            return Type::getType(self::dateTimeTypeName($dbalType))->convertToDatabaseValue($value, $platform);
+        }
 
-        return Type::getType($typeName)->convertToDatabaseValue($value, $platform);
+        if ((is_object($value) || is_array($value)) && $dbalType !== null && Type::hasType($dbalType)) {
+            return Type::getType($dbalType)->convertToDatabaseValue($value, $platform);
+        }
+
+        return $value;
+    }
+
+    private static function dateTimeTypeName(?string $dbalType): string
+    {
+        if ($dbalType === null || !Type::hasType($dbalType)) {
+            return Types::DATETIME_IMMUTABLE;
+        }
+
+        if (in_array($dbalType, self::DATE_TIME_TYPES, true)) {
+            return $dbalType;
+        }
+
+        // A custom type (not one of the built-in DBAL types) owns the conversion of its own values.
+        return in_array($dbalType, (new ReflectionClass(Types::class))->getConstants(), true)
+            ? Types::DATETIME_IMMUTABLE
+            : $dbalType;
     }
 }

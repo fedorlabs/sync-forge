@@ -204,7 +204,13 @@ if (!$result->isSuccess()) {
   entity listeners, and subscribers. Search indexing, timestamps, audit records,
   and other listener-driven effects must be handled separately when needed.
   Already managed entities may be stale; clear or refresh them before reuse.
-- Diff is scalar-oriented - no deep JSON comparison.
+- Diff is scalar-oriented. Values the application passes as objects or arrays (for example
+  `Money` or a PHP array for a `json` column) are converted with the DBAL type of the column,
+  like Doctrine ORM does, when `fieldTypes` names a registered type; `BackedEnum` values are
+  written as their backing value. Scalars and `null` are written as they are, so a value that
+  is already in database form is not converted twice. `json` columns are compared structurally
+  (key order and whitespace are ignored); there is no deep comparison for other types, and
+  `convertToDatabaseValueSQL()` of custom types is not applied.
 - `DateTimeInterface` values are written the same way Doctrine ORM writes them: through the
   DBAL type of the column (`date`, `datetime`, `datetimetz` and their immutable variants), with
   no shift to another timezone. The Doctrine ORM metadata provider reads the types from the
