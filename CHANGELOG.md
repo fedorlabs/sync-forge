@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-01
+
 ### Fixed
 - `scope()` now rejects fields that are not part of the sync key. With such a key a row of another scope with the same key was planned as an insert and the upsert silently moved it into the scope.
 - Mutable `DateTime` values written to `*_immutable` columns, and immutable ones written to mutable `datetime` columns, no longer fail with `InvalidType`; the value is converted to the class the DBAL 4 type accepts.
