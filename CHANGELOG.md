@@ -9,7 +9,7 @@
 - Warn about keys repeated across chunks (the last row still wins).
 
 ### Changed
-- `DateTimeInterface` values are no longer shifted to UTC when written. Rows previously written by SyncForge in UTC are rewritten on the first sync after upgrading, because the diff now compares them in the PHP default timezone.
+- Naive database date-time strings are now read in the PHP default timezone when diffing (previously as UTC). If the PHP timezone is not UTC and such values were written by other means as UTC, they are treated as changed and rewritten from the source on the first sync.
 
 ### Fixed
 - Read the key scan for `deleteMissing` in pages (keyset pagination) instead of one buffered result, so memory no longer grows with table size on PostgreSQL and MySQL.
