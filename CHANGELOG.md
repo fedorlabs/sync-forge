@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- `SyncBuilder::setOnInsert()` fills fields the source row lacks on inserted rows (constructor defaults such as `created_at`).
+- `SyncBuilder::touchOnChange()` sets a field on an updated row only when watched fields changed (for example `updated_at`, `price_updated_at`), so unchanged rows are not touched. The value is the start of the run unless given.
+- `SyncBuilder::returnUpdated()` and `returnDeleted()` fill `SyncResult::$updatedKeys` and `$deletedKeys`, next to `returnInserted()`.
+
 ## [0.3.1] - 2026-11-01
 
 ### Fixed

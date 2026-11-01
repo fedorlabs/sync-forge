@@ -43,6 +43,9 @@ final class SyncPipeline implements SyncPipelineInterface
         $metadata = $this->metadataProvider->get($context->entityClass);
         $this->validateKeyFields($metadata, $context->keyFields);
         $this->validateScope($metadata, $context->keyFields, $context->scope);
+        $this->validateWriteTimeFields($metadata, $context);
+        $enricher = new PlanEnricher($context, $startedAt);
+        $keyProjection = array_values(array_unique([...$context->keyFields, ...$metadata->identifierFields]));
 
         $platformContext = $this->platformDetector->detect();
         $executor = $this->executorFactory->forPlatform($platformContext);
@@ -59,6 +62,10 @@ final class SyncPipeline implements SyncPipelineInterface
         $incomingKeySet = [];
         /** @var list<array<string,mixed>> $insertedKeys */
         $insertedKeys = [];
+        /** @var list<array<string,mixed>> $updatedKeys */
+        $updatedKeys = [];
+        /** @var list<array<string,mixed>> $deletedKeys */
+        $deletedKeys = [];
 
         foreach (ChunkIterator::fromIterable($context->source, $context->chunkSize) as $index => $chunkRows) {
             $chunkCount++;
@@ -96,6 +103,8 @@ final class SyncPipeline implements SyncPipelineInterface
                     new DiffContext($metadata, $context->keyFields, $platformContext->platform),
                 );
 
+                $plan = $enricher->enrich($plan);
+
                 $executionResult = $executor->execute($plan, new ExecutionContext(
                     metadata: $metadata,
                     keyFields: $context->keyFields,
@@ -105,6 +114,12 @@ final class SyncPipeline implements SyncPipelineInterface
 
                 if ($context->returnInserted && $plan->inserts !== []) {
                     $insertedKeys = [...$insertedKeys, ...$this->collectInsertedKeys($metadata, $context, $plan->inserts)];
+                }
+
+                if ($context->returnUpdated) {
+                    foreach ($plan->updates as $entry) {
+                        $updatedKeys[] = $this->projectFields($existingIndex->rowsByKey[$entry->key] ?? $entry->row, $keyProjection);
+                    }
                 }
 
                 $inserted += $executionResult->inserted;
@@ -133,13 +148,15 @@ final class SyncPipeline implements SyncPipelineInterface
             }
 
             try {
-                $deleted += $this->executeDeleteMissing(
+                $deletion = $this->executeDeleteMissing(
                     metadata: $metadata,
                     keyFields: $context->keyFields,
                     incomingKeySet: $incomingKeySet,
                     executor: $executor,
                     context: $context,
                 );
+                $deleted += $deletion['deleted'];
+                $deletedKeys = [...$deletedKeys, ...$deletion['keys']];
             } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
@@ -167,6 +184,8 @@ final class SyncPipeline implements SyncPipelineInterface
             warnings: $warnings,
             errors: $errors,
             insertedKeys: $insertedKeys,
+            updatedKeys: $updatedKeys,
+            deletedKeys: $deletedKeys,
         );
     }
 
@@ -295,9 +314,39 @@ final class SyncPipeline implements SyncPipelineInterface
         return $rows;
     }
 
+    private function validateWriteTimeFields(EntityMetadata $metadata, SyncContext $context): void
+    {
+        $fields = array_keys($context->insertDefaults);
+        foreach ($context->touchRules as $rule) {
+            $fields = [...$fields, $rule->field, ...($rule->watchedFields ?? [])];
+        }
+
+        foreach ($fields as $field) {
+            if (!in_array($field, $metadata->fields, true)) {
+                throw new MetadataException(sprintf('Field "%s" is not mapped for %s.', $field, $metadata->entityClass));
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @param list<string> $fields
+     * @return array<string,mixed>
+     */
+    private function projectFields(array $row, array $fields): array
+    {
+        $projected = [];
+        foreach ($fields as $field) {
+            $projected[$field] = $row[$field] ?? null;
+        }
+
+        return $projected;
+    }
+
     /**
      * @param list<string> $keyFields
      * @param array<string,bool> $incomingKeySet
+     * @return array{deleted:int,keys:list<array<string,mixed>>}
      */
     private function executeDeleteMissing(
         EntityMetadata $metadata,
@@ -305,8 +354,9 @@ final class SyncPipeline implements SyncPipelineInterface
         array $incomingKeySet,
         BulkExecutorInterface $executor,
         SyncContext $context,
-    ): int {
+    ): array {
         $deleted = 0;
+        $deletedKeys = [];
 
         if ($this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface && $context->scope !== []) {
             $batches = $this->existingRowsProvider->iterateAllKeysInScope($metadata, $keyFields, $context->scope, $context->chunkSize);
@@ -345,9 +395,14 @@ final class SyncPipeline implements SyncPipelineInterface
             );
 
             $deleted += $executionResult->deleted;
+            if ($context->returnDeleted) {
+                foreach ($toDelete as $row) {
+                    $deletedKeys[] = $this->projectFields($row, $keyFields);
+                }
+            }
         }
 
-        return $deleted;
+        return ['deleted' => $deleted, 'keys' => $deletedKeys];
     }
 
     private function classifyException(Throwable $e): string

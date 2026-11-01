@@ -13,6 +13,8 @@ final class SyncResult
      * @param list<string> $warnings
      * @param list<ErrorEntry> $errors
      * @param list<array<string,mixed>> $insertedKeys key and identifier fields of inserted rows, filled with returnInserted()
+     * @param list<array<string,mixed>> $updatedKeys key and identifier fields of updated rows, filled with returnUpdated()
+     * @param list<array<string,mixed>> $deletedKeys key fields of deleted rows, filled with returnDeleted()
      */
     public function __construct(
         public readonly string $entityClass,
@@ -28,6 +30,8 @@ final class SyncResult
         public readonly array $warnings = [],
         public readonly array $errors = [],
         public readonly array $insertedKeys = [],
+        public readonly array $updatedKeys = [],
+        public readonly array $deletedKeys = [],
     ) {
     }
 
@@ -55,6 +59,8 @@ final class SyncResult
             'dryRun' => $this->dryRun,
             'warnings' => $this->warnings,
             'insertedKeys' => $this->insertedKeys,
+            'updatedKeys' => $this->updatedKeys,
+            'deletedKeys' => $this->deletedKeys,
             'errors' => array_map(
                 static fn (ErrorEntry $e): array => [
                     'type' => $e->type,
