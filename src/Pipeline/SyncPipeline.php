@@ -42,7 +42,7 @@ final class SyncPipeline implements SyncPipelineInterface
         $startedAt = new DateTimeImmutable();
         $metadata = $this->metadataProvider->get($context->entityClass);
         $this->validateKeyFields($metadata, $context->keyFields);
-        $this->validateScope($metadata, $context->scope);
+        $this->validateScope($metadata, $context->keyFields, $context->scope);
 
         $platformContext = $this->platformDetector->detect();
         $executor = $this->executorFactory->forPlatform($platformContext);
@@ -228,9 +228,10 @@ final class SyncPipeline implements SyncPipelineInterface
     }
 
     /**
+     * @param list<string> $keyFields
      * @param array<string,scalar|null> $scope
      */
-    private function validateScope(EntityMetadata $metadata, array $scope): void
+    private function validateScope(EntityMetadata $metadata, array $keyFields, array $scope): void
     {
         if ($scope === []) {
             return;
@@ -242,6 +243,15 @@ final class SyncPipeline implements SyncPipelineInterface
                     'Scope field "%s" is not mapped for %s.',
                     $field,
                     $metadata->entityClass,
+                ));
+            }
+        }
+
+        foreach (array_keys($scope) as $field) {
+            if (!in_array($field, $keyFields, true)) {
+                throw new InvalidConfigurationException(sprintf(
+                    'Scope field "%s" must be part of the sync key: with a key that does not include it, an upsert would take over a row that belongs to another scope.',
+                    $field,
                 ));
             }
         }
