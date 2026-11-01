@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SyncForge\Tests\Unit\Executor;
 
+use DateTime;
 use DateTimeImmutable;
 use Doctrine\DBAL\Platforms\SQLitePlatform;
 use PHPUnit\Framework\TestCase;
@@ -49,6 +50,24 @@ final class ParameterValueTest extends TestCase
 
         self::assertSame($money, ParameterValue::normalize($money, new SQLitePlatform(), null));
         self::assertSame($money, ParameterValue::normalize($money, new SQLitePlatform(), 'unknown_type'));
+    }
+
+    public function testMutableAndImmutableDateTimesMatchTheClassTheColumnTypeAccepts(): void
+    {
+        $platform = new SQLitePlatform();
+        $mutable = new DateTime('2024-06-01 13:45:00');
+        $immutable = new DateTimeImmutable('2024-06-01 13:45:00');
+
+        foreach (['datetime_immutable', 'datetimetz_immutable', 'date_immutable', 'time_immutable', 'datetime', 'datetimetz', 'date', 'time'] as $type) {
+            self::assertSame(
+                ParameterValue::normalize($immutable, $platform, $type),
+                ParameterValue::normalize($mutable, $platform, $type),
+                $type,
+            );
+        }
+
+        self::assertSame('2024-06-01 13:45:00', ParameterValue::normalize($mutable, $platform, 'datetime_immutable'));
+        self::assertSame('2024-06-01 13:45:00', ParameterValue::normalize($immutable, $platform, 'datetime'));
     }
 
     public function testDateTimeUsesDateTypeOfTheColumn(): void

@@ -136,16 +136,21 @@ do not carry them. A source row with a different value for a scope field is reje
 
 ```php
 $result = $syncForge->for(Price::class)
-    ->key(['sku'])
+    ->key(['supplierId', 'sku'])
     ->scope(['supplierId' => 42])
     ->source($rows)
     ->deleteMissing(true)
     ->run();
 ```
 
-Scope fields must be mapped, values must be scalar or `null`, and the existing rows provider
+Scope fields must be mapped and must be part of the sync key, values must be scalar or `null`,
+and the existing rows provider
 must implement `ScopedExistingRowsProviderInterface` (the DBAL one does); otherwise the run
 fails instead of reading or deleting rows outside the scope.
+
+The scope fields have to be in the key because rows are looked up inside the scope only: with a
+key such as `sku` alone, a row of another scope with the same `sku` is not found, planned as an
+insert, and the upsert would then take that row over. The run is rejected before anything is written.
 
 ### Chaining child records
 

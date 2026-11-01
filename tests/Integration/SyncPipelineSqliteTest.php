@@ -523,9 +523,10 @@ final class SyncPipelineSqliteTest extends TestCase
         $sync = $this->buildPriceSync($connection);
         $connection->insert('prices', ['sku' => 'A', 'supplier_id' => 42, 'price' => 1]);
         $connection->insert('prices', ['sku' => 'B', 'supplier_id' => 42, 'price' => 1]);
+        $connection->insert('prices', ['sku' => 'A', 'supplier_id' => 43, 'price' => 7]);
         $connection->insert('prices', ['sku' => 'C', 'supplier_id' => 43, 'price' => 1]);
 
-        $result = $sync->for(SqliteScopedPriceStub::class)->key(['sku'])
+        $result = $sync->for(SqliteScopedPriceStub::class)->key(['supplier_id', 'sku'])
             ->scope(['supplier_id' => 42])
             ->source([['sku' => 'A', 'price' => 2], ['sku' => 'D', 'price' => 3]])
             ->chunkSize(1)->deleteMissing()->run();
@@ -535,26 +536,33 @@ final class SyncPipelineSqliteTest extends TestCase
         self::assertSame(1, $result->updated);
         self::assertSame(1, $result->deleted);
         self::assertSame(
-            [['A', 42, 2], ['C', 43, 1], ['D', 42, 3]],
-            array_map('array_values', $connection->fetchAllAssociative('SELECT sku, supplier_id, price FROM prices ORDER BY sku')),
+            [[42, 'A', 2], [42, 'D', 3], [43, 'A', 7], [43, 'C', 1]],
+            array_map(
+                static fn (array $row): array => [(int) $row['supplier_id'], $row['sku'], (int) $row['price']],
+                $connection->fetchAllAssociative('SELECT supplier_id, sku, price FROM prices ORDER BY supplier_id, sku'),
+            ),
         );
     }
 
-    public function testScopeDoesNotMatchSameKeyOfAnotherSupplier(): void
+    public function testScopeFieldMissingFromKeyIsRejectedBeforeAnyWrite(): void
     {
         $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
-        $sync = $this->buildPriceSync($connection, withScopedKey: false);
-        $connection->insert('prices', ['sku' => 'A', 'supplier_id' => 43, 'price' => 1]);
+        $sync = $this->buildPriceSync($connection);
+        $connection->insert('prices', ['sku' => 'X', 'supplier_id' => 7, 'price' => 100]);
+        $connection->insert('prices', ['sku' => 'Y', 'supplier_id' => 42, 'price' => 200]);
 
-        $result = $sync->for(SqliteScopedPriceStub::class)->key(['sku'])
-            ->scope(['supplier_id' => 42])
-            ->source([['sku' => 'A', 'price' => 5]])->run();
+        try {
+            $sync->for(SqliteScopedPriceStub::class)->key(['sku'])
+                ->scope(['supplier_id' => 42])
+                ->source([['sku' => 'X', 'price' => 999]])->deleteMissing()->run();
+            self::fail('A scope field outside the key must be rejected.');
+        } catch (InvalidConfigurationException $e) {
+            self::assertStringContainsString('must be part of the sync key', $e->getMessage());
+        }
 
-        self::assertSame(1, $result->inserted);
-        self::assertSame(0, $result->updated);
         self::assertSame(
-            [[43, 1], [42, 5]],
-            array_map('array_values', $connection->fetchAllAssociative('SELECT supplier_id, price FROM prices ORDER BY rowid')),
+            [['X', 7, 100], ['Y', 42, 200]],
+            array_map('array_values', $connection->fetchAllAssociative('SELECT sku, supplier_id, price FROM prices ORDER BY sku')),
         );
     }
 
@@ -566,7 +574,7 @@ final class SyncPipelineSqliteTest extends TestCase
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('outside the sync scope');
 
-        $sync->for(SqliteScopedPriceStub::class)->key(['sku'])
+        $sync->for(SqliteScopedPriceStub::class)->key(['supplier_id', 'sku'])
             ->scope(['supplier_id' => 42])
             ->source([['sku' => 'A', 'supplier_id' => 43, 'price' => 1]])->run();
     }
@@ -578,23 +586,19 @@ final class SyncPipelineSqliteTest extends TestCase
 
         $this->expectException(MetadataException::class);
 
-        $sync->for(SqliteScopedPriceStub::class)->key(['sku'])->scope(['unknown' => 1])->source([['sku' => 'A', 'price' => 1]])->run();
+        $sync->for(SqliteScopedPriceStub::class)->key(['supplier_id', 'sku'])->scope(['unknown' => 1])->source([['sku' => 'A', 'price' => 1]])->run();
     }
 
-    private function buildPriceSync(Connection $connection, bool $withScopedKey = true): SyncForge
+    private function buildPriceSync(Connection $connection): SyncForge
     {
-        $connection->executeStatement(
-            $withScopedKey
-                ? 'CREATE TABLE prices (sku TEXT NOT NULL PRIMARY KEY, supplier_id INTEGER NOT NULL, price INTEGER NOT NULL)'
-                : 'CREATE TABLE prices (sku TEXT NOT NULL, supplier_id INTEGER NOT NULL, price INTEGER NOT NULL)',
-        );
+        $connection->executeStatement('CREATE TABLE prices (sku TEXT NOT NULL, supplier_id INTEGER NOT NULL, price INTEGER NOT NULL, PRIMARY KEY (supplier_id, sku))');
         $metadata = new EntityMetadata(
             SqliteScopedPriceStub::class,
             'prices',
             ['sku', 'supplier_id', 'price'],
             ['sku' => 'sku', 'supplier_id' => 'supplier_id', 'price' => 'price'],
-            ['sku'],
-            ['supplier_id', 'price'],
+            ['supplier_id', 'sku'],
+            ['price'],
         );
         $keyResolver = new CompositeKeyResolver();
 
