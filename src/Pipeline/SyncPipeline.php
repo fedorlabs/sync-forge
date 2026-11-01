@@ -57,6 +57,8 @@ final class SyncPipeline implements SyncPipelineInterface
         /** @var list<ErrorEntry> $errors */
         $errors = [];
         $incomingKeySet = [];
+        /** @var list<array<string,mixed>> $insertedKeys */
+        $insertedKeys = [];
 
         foreach (ChunkIterator::fromIterable($context->source, $context->chunkSize) as $index => $chunkRows) {
             $chunkCount++;
@@ -80,9 +82,7 @@ final class SyncPipeline implements SyncPipelineInterface
             }
 
             try {
-                $existingRows = $this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface && $context->scope !== []
-                    ? $this->existingRowsProvider->fetchByIncomingRowsInScope($metadata, $context->keyFields, $chunkRows, $context->scope)
-                    : $this->existingRowsProvider->fetchByIncomingRows($metadata, $context->keyFields, $chunkRows);
+                $existingRows = $this->fetchExistingRows($metadata, $context, $chunkRows);
                 $existingIndex = $this->keyResolver->indexByKey($existingRows, $context->keyFields);
                 foreach (array_keys($existingIndex->rowsByKey) as $existingKey) {
                     if (!isset($incomingIndex->rowsByKey[$existingKey])) {
@@ -102,6 +102,10 @@ final class SyncPipeline implements SyncPipelineInterface
                     dryRun: $context->dryRun,
                     chunkIndex: $index,
                 ));
+
+                if ($context->returnInserted && $plan->inserts !== []) {
+                    $insertedKeys = [...$insertedKeys, ...$this->collectInsertedKeys($metadata, $context, $plan->inserts)];
+                }
 
                 $inserted += $executionResult->inserted;
                 $updated += $executionResult->updated;
@@ -162,6 +166,7 @@ final class SyncPipeline implements SyncPipelineInterface
             dryRun: $context->dryRun,
             warnings: $warnings,
             errors: $errors,
+            insertedKeys: $insertedKeys,
         );
     }
 
@@ -179,6 +184,47 @@ final class SyncPipeline implements SyncPipelineInterface
                 ));
             }
         }
+    }
+
+    /**
+     * @param list<array<string,mixed>> $rows
+     * @return list<array<string,mixed>>
+     */
+    private function fetchExistingRows(EntityMetadata $metadata, SyncContext $context, array $rows): array
+    {
+        return $this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface && $context->scope !== []
+            ? $this->existingRowsProvider->fetchByIncomingRowsInScope($metadata, $context->keyFields, $rows, $context->scope)
+            : $this->existingRowsProvider->fetchByIncomingRows($metadata, $context->keyFields, $rows);
+    }
+
+    /**
+     * Reads the inserted rows back by key, so generated identifiers and defaults are included.
+     * A dry run writes nothing, so only the key fields of the planned inserts are returned.
+     *
+     * @param list<array<string,mixed>> $insertedRows
+     * @return list<array<string,mixed>>
+     */
+    private function collectInsertedKeys(EntityMetadata $metadata, SyncContext $context, array $insertedRows): array
+    {
+        $fields = $context->keyFields;
+        $rows = $insertedRows;
+
+        if (!$context->dryRun) {
+            $fields = array_values(array_unique([...$context->keyFields, ...$metadata->identifierFields]));
+            $rows = $this->fetchExistingRows($metadata, $context, $insertedRows);
+        }
+
+        return array_map(
+            static function (array $row) use ($fields): array {
+                $projected = [];
+                foreach ($fields as $field) {
+                    $projected[$field] = $row[$field] ?? null;
+                }
+
+                return $projected;
+            },
+            $rows,
+        );
     }
 
     /**

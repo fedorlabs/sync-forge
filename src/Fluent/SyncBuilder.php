@@ -21,6 +21,7 @@ final class SyncBuilder
     private bool $continueOnError = false;
     /** @var array<string,scalar|null> */
     private array $scope = [];
+    private bool $returnInserted = false;
 
     public function __construct(
         private readonly SyncPipelineInterface $pipeline,
@@ -91,6 +92,17 @@ final class SyncBuilder
     }
 
     /**
+     * Collects the key and identifier fields of inserted rows, as stored in the database,
+     * into SyncResult::$insertedKeys. The list is held in memory for the whole run.
+     */
+    public function returnInserted(bool $enabled = true): self
+    {
+        $this->returnInserted = $enabled;
+
+        return $this;
+    }
+
+    /**
      * Limits the sync to rows matching these field values: existing rows are looked up and deleted only within
      * the scope, and the values are filled into inserted rows that do not carry them.
      *
@@ -136,6 +148,7 @@ final class SyncBuilder
             dryRun: $this->dryRun,
             continueOnError: $this->continueOnError,
             scope: $this->scope,
+            returnInserted: $this->returnInserted,
         ));
     }
 }

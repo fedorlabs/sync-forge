@@ -482,6 +482,41 @@ final class SyncPipelineSqliteTest extends TestCase
         }
     }
 
+    public function testReturnInsertedCollectsKeysAndGeneratedIdentifiers(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $connection->executeStatement('CREATE TABLE parts (id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT NOT NULL UNIQUE, price INTEGER NOT NULL)');
+        $metadata = new EntityMetadata(
+            SqlitePartStub::class,
+            'parts',
+            ['id', 'sku', 'price'],
+            ['id' => 'id', 'sku' => 'sku', 'price' => 'price'],
+            ['id'],
+            ['price'],
+        );
+        $keyResolver = new CompositeKeyResolver();
+        $sync = new SyncForge(
+            metadataProvider: new InMemoryEntityMetadataProvider([SqlitePartStub::class => $metadata]),
+            keyResolver: $keyResolver,
+            executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
+            platformDetector: new DbalPlatformDetector($connection),
+            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+        );
+        $connection->insert('parts', ['sku' => 'A', 'price' => 1]);
+        $source = [['sku' => 'A', 'price' => 1], ['sku' => 'B', 'price' => 2], ['sku' => 'C', 'price' => 3]];
+
+        $dryRun = $sync->for(SqlitePartStub::class)->key(['sku'])->source($source)->returnInserted()->dryRun()->run();
+        self::assertSame([['sku' => 'B'], ['sku' => 'C']], $dryRun->insertedKeys);
+
+        $withoutOptIn = $sync->for(SqlitePartStub::class)->key(['sku'])->source([['sku' => 'D', 'price' => 4]])->run();
+        self::assertSame([], $withoutOptIn->insertedKeys);
+
+        $result = $sync->for(SqlitePartStub::class)->key(['sku'])->source($source)->chunkSize(1)->returnInserted()->run();
+        self::assertSame(2, $result->inserted);
+        self::assertSame([['sku' => 'B', 'id' => 3], ['sku' => 'C', 'id' => 4]], $result->insertedKeys);
+        self::assertSame($result->insertedKeys, $result->toArray()['insertedKeys']);
+    }
+
     public function testScopeLimitsDeleteMissingToOneSupplier(): void
     {
         $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
@@ -632,6 +667,10 @@ final class SqliteProductStub
 }
 
 final class SqliteStockStub
+{
+}
+
+final class SqlitePartStub
 {
 }
 
