@@ -114,7 +114,7 @@ jobs:
       - name: PostgreSQL integration tests
         env:
           TEST_PG_DSN: pgsql://sync_forge:sync_forge@127.0.0.1:5432/sync_forge_test
-        run: vendor/bin/phpunit --filter SyncPipelinePostgresTest
+        run: vendor/bin/phpunit --filter "SyncPipelinePostgres(Features)?Test"
 
   tests-mysql:
     name: MySQL Integration
@@ -152,4 +152,4 @@ jobs:
       - name: MySQL integration tests
         env:
           TEST_MYSQL_DSN: mysql://sync_forge:sync_forge@127.0.0.1:3306/sync_forge_test
-        run: vendor/bin/phpunit --filter SyncPipelineMySqlTest
+        run: vendor/bin/phpunit --filter "SyncPipelineMySql(Features)?Test"

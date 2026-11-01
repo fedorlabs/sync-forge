@@ -13,7 +13,7 @@ test-integration:
 	@vendor/bin/phpunit --filter SyncPipelineSqliteTest
 
 test-integration-external:
-	@vendor/bin/phpunit --filter "SyncPipeline(Postgres|MySql)Test"
+	@vendor/bin/phpunit --filter "SyncPipeline(Postgres|MySql)(Features)?Test"
 
 lint:
 	@find src tests config -name '*.php' -print0 | xargs -0 -n1 php -l
