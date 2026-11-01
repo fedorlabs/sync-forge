@@ -3,9 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- `SyncBuilder::updateFields()` limits comparison and updates to the given fields; `insertMissing(false)` and `updateExisting(false)` make a sync update-only or insert-only. Rows left out are counted in `SyncResult::$skipped`.
+- `SyncBuilder::markMissing()` writes values (for example `isActive = false`) to rows missing from the source instead of deleting them, with the guards of `deleteMissing()`. `SyncResult::$marked` and `$markedKeys` (with `returnDeleted()`) report it, and `touchOnChange()` rules apply.
+- `SyncBuilder::onChunk()` calls back with a `ChunkResult` after each chunk, also after failed ones.
 - `SyncBuilder::setOnInsert()` fills fields the source row lacks on inserted rows (constructor defaults such as `created_at`).
 - `SyncBuilder::touchOnChange()` sets a field on an updated row only when watched fields changed (for example `updated_at`, `price_updated_at`), so unchanged rows are not touched. The value is the start of the run unless given.
 - `SyncBuilder::returnUpdated()` and `returnDeleted()` fill `SyncResult::$updatedKeys` and `$deletedKeys`, next to `returnInserted()`.
+
+### Fixed
+- The diff compares `boolean` columns independent of the driver representation (`true`, `1`, `'t'`) and `integer`, `smallint` and `bigint` columns independent of string or int results, so such rows are no longer updated on every sync.
+- The fallback executor binds booleans, integers and `null` with explicit types; `false` was written as an empty string.
 
 ## [0.3.1] - 2026-11-01
 

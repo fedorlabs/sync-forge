@@ -28,6 +28,11 @@ final class SyncPipelinePostgresFeaturesTest extends AbstractExternalDatabaseFea
         return 'TIMESTAMPTZ';
     }
 
+    protected function booleanColumnSql(): string
+    {
+        return 'BOOLEAN';
+    }
+
     protected function dateTimeDbalType(): string
     {
         return 'datetimetz_immutable';

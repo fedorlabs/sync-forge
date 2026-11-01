@@ -34,4 +34,20 @@ final class EntityMetadata
             }
         }
     }
+
+    /**
+     * @param list<string> $updatableFields
+     */
+    public function withUpdatableFields(array $updatableFields): self
+    {
+        return new self(
+            $this->entityClass,
+            $this->tableName,
+            $this->fields,
+            $this->fieldToColumn,
+            $this->identifierFields,
+            $updatableFields,
+            $this->fieldTypes,
+        );
+    }
 }

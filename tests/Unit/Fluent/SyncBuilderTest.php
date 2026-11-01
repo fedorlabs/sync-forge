@@ -85,6 +85,52 @@ final class SyncBuilderTest extends TestCase
         (new SyncBuilder(new CapturingPipeline(), EntityStub::class))->setOnInsert(['x']);
     }
 
+    public function testUpdateControlOptionsArePassedToContext(): void
+    {
+        $pipeline = new CapturingPipeline();
+        $progress = static function (): void {
+        };
+        (new SyncBuilder($pipeline, EntityStub::class))
+            ->key(['external_id'])->source([])
+            ->updateFields(['price', 'stock'])->insertMissing(false)->updateExisting(false)
+            ->markMissing(['is_active' => false])->onChunk($progress)->run();
+
+        $context = $pipeline->lastContext;
+        self::assertNotNull($context);
+        self::assertSame(['price', 'stock'], $context->updateFields);
+        self::assertFalse($context->insertMissing);
+        self::assertFalse($context->updateExisting);
+        self::assertSame(['is_active' => false], $context->markMissing);
+        self::assertNotNull($context->onChunk);
+    }
+
+    public function testDeleteMissingAndMarkMissingCannotBeCombined(): void
+    {
+        $builder = (new SyncBuilder(new CapturingPipeline(), EntityStub::class))
+            ->key(['external_id'])->source([])->deleteMissing()->markMissing(['is_active' => false]);
+
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('cannot be combined');
+
+        $builder->run();
+    }
+
+    public function testEmptyUpdateFieldsAndMarkMissingAreRejected(): void
+    {
+        $builder = new SyncBuilder(new CapturingPipeline(), EntityStub::class);
+
+        $rejected = 0;
+        foreach ([static fn () => $builder->updateFields([]), static fn () => $builder->markMissing([]), static fn () => $builder->markMissing(['x'])] as $call) {
+            try {
+                $call();
+            } catch (InvalidConfigurationException) {
+                ++$rejected;
+            }
+        }
+
+        self::assertSame(3, $rejected);
+    }
+
     public function testRunWithoutSourceThrows(): void
     {
         $builder = new SyncBuilder(new CapturingPipeline(), EntityStub::class);

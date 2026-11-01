@@ -28,6 +28,11 @@ final class SyncPipelineMySqlFeaturesTest extends AbstractExternalDatabaseFeatur
         return 'DATETIME';
     }
 
+    protected function booleanColumnSql(): string
+    {
+        return 'TINYINT(1)';
+    }
+
     protected function dateTimeDbalType(): string
     {
         return 'datetime_immutable';

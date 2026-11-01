@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace SyncForge\Fluent;
 
+use Closure;
 use SyncForge\Exception\InvalidConfigurationException;
 use SyncForge\Pipeline\SyncPipelineInterface;
 use SyncForge\Pipeline\TouchRule;
+use SyncForge\Report\ChunkResult;
 use SyncForge\Report\SyncResult;
 use SyncForge\SyncContext;
 
@@ -25,6 +27,13 @@ final class SyncBuilder
     private bool $returnInserted = false;
     private bool $returnUpdated = false;
     private bool $returnDeleted = false;
+    /** @var list<string>|null */
+    private ?array $updateFields = null;
+    private bool $insertMissing = true;
+    private bool $updateExisting = true;
+    /** @var array<string,mixed> */
+    private array $markMissing = [];
+    private ?Closure $onChunk = null;
     /** @var array<string,mixed> */
     private array $insertDefaults = [];
     /** @var list<TouchRule> */
@@ -105,6 +114,89 @@ final class SyncBuilder
     public function returnInserted(bool $enabled = true): self
     {
         $this->returnInserted = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * Compares and updates only these fields, for example a price feed that must not touch the rest of the row.
+     * Inserted rows are still written with every field the source carries.
+     *
+     * @param array<array-key,mixed> $fields
+     */
+    public function updateFields(array $fields): self
+    {
+        $validated = [];
+        foreach ($fields as $field) {
+            if (!is_string($field) || $field === '') {
+                throw new InvalidConfigurationException('updateFields() must be a list of non-empty field names.');
+            }
+            $validated[] = $field;
+        }
+
+        if ($validated === []) {
+            throw new InvalidConfigurationException('updateFields() cannot be empty.');
+        }
+
+        $this->updateFields = $validated;
+
+        return $this;
+    }
+
+    /**
+     * With false, rows missing from the database are not inserted (counted as skipped).
+     */
+    public function insertMissing(bool $enabled = true): self
+    {
+        $this->insertMissing = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * With false, existing rows are not updated (counted as skipped), so the sync only adds new rows.
+     */
+    public function updateExisting(bool $enabled = true): self
+    {
+        $this->updateExisting = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * Instead of deleting rows that are missing from the source, writes these values to them
+     * (for example ['isActive' => false]); rows that already have the values are left alone.
+     * Works like deleteMissing() with the same scope and safety guards; the two cannot be combined.
+     *
+     * @param array<array-key,mixed> $values field => value
+     */
+    public function markMissing(array $values): self
+    {
+        $validated = [];
+        foreach ($values as $field => $value) {
+            if (!is_string($field) || $field === '') {
+                throw new InvalidConfigurationException('markMissing() must map non-empty field names to values.');
+            }
+            $validated[$field] = $value;
+        }
+
+        if ($validated === []) {
+            throw new InvalidConfigurationException('markMissing() cannot be empty.');
+        }
+
+        $this->markMissing = $validated;
+
+        return $this;
+    }
+
+    /**
+     * Calls $callback after each chunk, successful or failed, for progress output.
+     *
+     * @param callable(ChunkResult): void $callback
+     */
+    public function onChunk(callable $callback): self
+    {
+        $this->onChunk = Closure::fromCallable($callback);
 
         return $this;
     }
@@ -220,6 +312,10 @@ final class SyncBuilder
             throw new InvalidConfigurationException('Sync source must be configured before run().');
         }
 
+        if ($this->deleteMissing && $this->markMissing !== []) {
+            throw new InvalidConfigurationException('deleteMissing() and markMissing() cannot be combined.');
+        }
+
         return $this->pipeline->run(new SyncContext(
             entityClass: $this->entityClass,
             keyFields: $this->keyFields,
@@ -234,6 +330,11 @@ final class SyncBuilder
             touchRules: $this->touchRules,
             returnUpdated: $this->returnUpdated,
             returnDeleted: $this->returnDeleted,
+            updateFields: $this->updateFields,
+            insertMissing: $this->insertMissing,
+            updateExisting: $this->updateExisting,
+            markMissing: $this->markMissing,
+            onChunk: $this->onChunk,
         ));
     }
 }

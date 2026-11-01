@@ -152,6 +152,18 @@ final class ScalarDiffEngine implements DiffEngineInterface
 
     private function normalize(mixed $value, ?string $type): mixed
     {
+        if ($type === Types::BOOLEAN) {
+            return $this->normalizeBoolean($value);
+        }
+
+        if ($type === Types::INTEGER || $type === Types::SMALLINT) {
+            return is_string($value) && preg_match('/^-?\d+$/', $value) === 1 ? (int) $value : $value;
+        }
+
+        if ($type === Types::BIGINT) {
+            return is_int($value) || (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) ? (string) $value : $value;
+        }
+
         if ($value instanceof DateTimeInterface) {
             return $this->normalizeDateTime($value, $type);
         }
@@ -170,6 +182,19 @@ final class ScalarDiffEngine implements DiffEngineInterface
      * Mirrors what the executors write: date columns keep only the date, timezone-aware columns keep the instant,
      * and other columns keep the wall-clock time of the value, which the database later returns in the PHP timezone.
      */
+    /**
+     * Drivers return booleans as bool, 0/1 or 't'/'f' depending on the platform.
+     */
+    private function normalizeBoolean(mixed $value): mixed
+    {
+        return match (true) {
+            is_bool($value) => $value,
+            $value === 1, $value === '1', $value === 't', $value === 'true' => true,
+            $value === 0, $value === '0', $value === 'f', $value === 'false' => false,
+            default => $value,
+        };
+    }
+
     private function normalizeDateTime(DateTimeInterface $value, ?string $type): string
     {
         if ($this->isDateType($type)) {

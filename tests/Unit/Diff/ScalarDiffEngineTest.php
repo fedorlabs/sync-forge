@@ -160,6 +160,25 @@ final class ScalarDiffEngineTest extends TestCase
         self::assertCount(1, $shifted->updates);
     }
 
+    public function testBooleanColumnTreatsDriverRepresentationsAsEqual(): void
+    {
+        foreach ([[true, 1], [true, '1'], [true, 't'], [false, 0], [false, '0'], [false, 'f']] as [$incoming, $existing]) {
+            $plan = $this->diffOne(['updated_at' => $incoming], ['updated_at' => $existing], ['updated_at' => 'boolean']);
+            self::assertSame(1, $plan->unchanged, var_export($existing, true));
+        }
+
+        $changed = $this->diffOne(['updated_at' => true], ['updated_at' => 0], ['updated_at' => 'boolean']);
+        self::assertCount(1, $changed->updates);
+    }
+
+    public function testIntegerColumnsIgnoreDriverStringRepresentation(): void
+    {
+        self::assertSame(1, $this->diffOne(['updated_at' => 5], ['updated_at' => '5'], ['updated_at' => 'integer'])->unchanged);
+        self::assertSame(1, $this->diffOne(['updated_at' => 5], ['updated_at' => '5'], ['updated_at' => 'bigint'])->unchanged);
+        self::assertSame(1, $this->diffOne(['updated_at' => '9007199254740993'], ['updated_at' => 9007199254740993], ['updated_at' => 'bigint'])->unchanged);
+        self::assertCount(1, $this->diffOne(['updated_at' => 6], ['updated_at' => '5'], ['updated_at' => 'integer'])->updates);
+    }
+
     public function testDateColumnComparesOnlyTheDay(): void
     {
         $plan = $this->diffOne(

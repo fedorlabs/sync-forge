@@ -27,6 +27,7 @@ PostgreSQL `ON CONFLICT` also requires a matching unique constraint or index.
 - `scope()` to limit lookups and deletion to a subset of the table
 - `returnInserted()`, `returnUpdated()`, `returnDeleted()` to get the keys (and ids) of changed rows
 - `setOnInsert()` and `touchOnChange()` for constructor defaults and modification timestamps
+- `updateFields()`, `insertMissing()` and `updateExisting()` for partial feeds, `markMissing()` for soft delete, `onChunk()` for progress
 
 ## Requirements
 
@@ -178,6 +179,60 @@ $result = $syncForge->for(Product::class)
   reacts to fields set by other `touchOnChange()` rules.
 - Every field must be mapped; otherwise the run fails with `MetadataException`.
 
+### Partial updates and sync modes
+
+```php
+// A price feed: update only price and stock, never create rows, leave the rest of the row alone.
+$result = $syncForge->for(Offer::class)
+    ->key(['supplierId', 'productId'])
+    ->scope(['supplierId' => 42])
+    ->source($rows)
+    ->updateFields(['price', 'stock'])
+    ->insertMissing(false)
+    ->run();
+```
+
+- `updateFields([...])` compares and updates only these fields (they must be mapped and not part
+  of the key). Inserted rows are still written with every field the source carries.
+- `insertMissing(false)` does not insert rows that are missing from the database, and
+  `updateExisting(false)` does not update existing rows. Rows left out are counted in
+  `SyncResult::$skipped`.
+
+### Soft delete: markMissing
+
+Physical deletion often fails on foreign keys (products referenced by orders). `markMissing()`
+writes values to the rows that are missing from the source instead:
+
+```php
+$result = $syncForge->for(Product::class)
+    ->key(['sku'])
+    ->source($rows)
+    ->markMissing(['isActive' => false])
+    ->touchOnChange('updatedAt')
+    ->returnDeleted()
+    ->run();
+
+echo $result->marked;       // rows flagged, rows that already carry the values are not rewritten
+// $result->markedKeys      // their keys and ids (with returnDeleted())
+```
+
+It follows the rules of `deleteMissing()`: same scope, an empty source is blocked, nothing is
+marked when a chunk failed, and `dryRun()` only counts. The two cannot be combined, and the
+marker fields must be mapped and not part of the key. `touchOnChange()` rules apply to marked rows.
+
+### Progress
+
+```php
+$syncForge->for(Product::class)->key(['sku'])->source($rows)
+    ->onChunk(static function (ChunkResult $chunk): void {
+        printf("chunk %d: %d rows, +%d ~%d =%d\n", $chunk->chunkIndex, $chunk->rows, $chunk->inserted, $chunk->updated, $chunk->unchanged);
+    })
+    ->run();
+```
+
+The callback runs after every chunk, also after a failed one with `continueOnError()`
+(`$chunk->error` is set, `$chunk->isSuccess()` is false). `processedRows` is cumulative.
+
 ### Chaining child records
 
 `returnInserted()` fills `SyncResult::$insertedKeys` with the key fields and identifier fields
@@ -277,7 +332,7 @@ if (!$result->isSuccess()) {
 - PostgreSQL and MySQL split inserts into consecutive groups with matching mapped
   columns. Missing fields are omitted so database defaults can apply.
 - `deleteMissing(true)` with an empty source throws as a safety guard.
-- `deleteMissing(true)` scans the entire mapped table unless `scope()` is set.
+- `deleteMissing(true)` and `markMissing()` scan the entire mapped table unless `scope()` is set.
 - An incomplete non-empty source can delete valid rows. Validate pagination and
   source completeness before enabling deletion; a source that silently ends
   early is indistinguishable from a complete snapshot. An exception while reading
