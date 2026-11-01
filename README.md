@@ -24,6 +24,7 @@ PostgreSQL `ON CONFLICT` also requires a matching unique constraint or index.
 - `deleteMissing` with batched key processing
 - Dry-run mode
 - `continueOnError` with typed error entries in `SyncResult`
+- `scope()` to limit lookups and deletion to a subset of the table
 
 ## Requirements
 
@@ -126,6 +127,25 @@ $result = $syncForge->for(StockLevel::class)
     ->run();
 ```
 
+### Scope: replace one supplier's data
+
+`scope()` limits the sync to rows matching the given field values. Existing rows are looked
+up and deleted only inside the scope, and the scope values are filled into inserted rows that
+do not carry them. A source row with a different value for a scope field is rejected.
+
+```php
+$result = $syncForge->for(Price::class)
+    ->key(['sku'])
+    ->scope(['supplierId' => 42])
+    ->source($rows)
+    ->deleteMissing(true)
+    ->run();
+```
+
+Scope fields must be mapped, values must be scalar or `null`, and the existing rows provider
+must implement `ScopedExistingRowsProviderInterface` (the DBAL one does); otherwise the run
+fails instead of reading or deleting rows outside the scope.
+
 ### Dry-run before delete
 
 Only enable deletion when the source is a complete snapshot of the entire table.
@@ -196,7 +216,7 @@ if (!$result->isSuccess()) {
 - PostgreSQL and MySQL split inserts into consecutive groups with matching mapped
   columns. Missing fields are omitted so database defaults can apply.
 - `deleteMissing(true)` with an empty source throws as a safety guard.
-- `deleteMissing(true)` scans the entire mapped table; scoped deletion is not yet supported.
+- `deleteMissing(true)` scans the entire mapped table unless `scope()` is set.
 - An incomplete non-empty source can delete valid rows. Validate pagination and
   source completeness before enabling deletion; a source that silently ends
   early is indistinguishable from a complete snapshot. An exception while reading

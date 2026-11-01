@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- `SyncBuilder::scope()` and `SyncContext::$scope` limit existing-row lookups and `deleteMissing` to rows matching the given field values, and fill the values into inserted rows. Requires an existing rows provider implementing the new `ScopedExistingRowsProviderInterface`, which `DbalExistingRowsProvider` does.
+
 ## [0.2.1] - 2026-11-01
 
 ### Added

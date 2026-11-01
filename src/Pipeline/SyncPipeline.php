@@ -42,6 +42,7 @@ final class SyncPipeline implements SyncPipelineInterface
         $startedAt = new DateTimeImmutable();
         $metadata = $this->metadataProvider->get($context->entityClass);
         $this->validateKeyFields($metadata, $context->keyFields);
+        $this->validateScope($metadata, $context->scope);
 
         $executor = $this->executorFactory->forPlatform($this->platformDetector->detect());
 
@@ -60,6 +61,7 @@ final class SyncPipeline implements SyncPipelineInterface
             $chunkCount++;
             $processedRows += count($chunkRows);
 
+            $chunkRows = $this->applyScopeToRows($chunkRows, $context->scope);
             $incomingIndex = $this->keyResolver->indexByKey($chunkRows, $context->keyFields);
             if ($incomingIndex->duplicateCount > 0) {
                 $warnings[] = sprintf('Chunk %d contains %d duplicate keys; last row wins.', $index, $incomingIndex->duplicateCount);
@@ -77,7 +79,9 @@ final class SyncPipeline implements SyncPipelineInterface
             }
 
             try {
-                $existingRows = $this->existingRowsProvider->fetchByIncomingRows($metadata, $context->keyFields, $chunkRows);
+                $existingRows = $this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface && $context->scope !== []
+                    ? $this->existingRowsProvider->fetchByIncomingRowsInScope($metadata, $context->keyFields, $chunkRows, $context->scope)
+                    : $this->existingRowsProvider->fetchByIncomingRows($metadata, $context->keyFields, $chunkRows);
                 $existingIndex = $this->keyResolver->indexByKey($existingRows, $context->keyFields);
                 foreach (array_keys($existingIndex->rowsByKey) as $existingKey) {
                     if (!isset($incomingIndex->rowsByKey[$existingKey])) {
@@ -177,6 +181,64 @@ final class SyncPipeline implements SyncPipelineInterface
     }
 
     /**
+     * @param array<string,scalar|null> $scope
+     */
+    private function validateScope(EntityMetadata $metadata, array $scope): void
+    {
+        if ($scope === []) {
+            return;
+        }
+
+        foreach (array_keys($scope) as $field) {
+            if (!in_array($field, $metadata->fields, true)) {
+                throw new MetadataException(sprintf(
+                    'Scope field "%s" is not mapped for %s.',
+                    $field,
+                    $metadata->entityClass,
+                ));
+            }
+        }
+
+        if (!$this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface) {
+            throw new InvalidConfigurationException(
+                'Scope requires an existing rows provider implementing ScopedExistingRowsProviderInterface.',
+            );
+        }
+    }
+
+    /**
+     * Fills scope values into rows that lack them and rejects rows that belong to another scope.
+     *
+     * @param list<array<string,mixed>> $rows
+     * @param array<string,scalar|null> $scope
+     * @return list<array<string,mixed>>
+     */
+    private function applyScopeToRows(array $rows, array $scope): array
+    {
+        if ($scope === []) {
+            return $rows;
+        }
+
+        foreach ($rows as $index => $row) {
+            foreach ($scope as $field => $value) {
+                $current = $row[$field] ?? null;
+                if (!array_key_exists($field, $row) || ($current === null && $value !== null)) {
+                    $rows[$index][$field] = $value;
+                    continue;
+                }
+
+                if ($current === $value || (is_scalar($current) && $value !== null && (string) $current === (string) $value)) {
+                    continue;
+                }
+
+                throw new InvalidConfigurationException(sprintf('Source row has "%s" outside the sync scope.', $field));
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
      * @param list<string> $keyFields
      * @param array<string,bool> $incomingKeySet
      */
@@ -189,7 +251,9 @@ final class SyncPipeline implements SyncPipelineInterface
     ): int {
         $deleted = 0;
 
-        if ($this->existingRowsProvider instanceof StreamedExistingKeysProviderInterface) {
+        if ($this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface && $context->scope !== []) {
+            $batches = $this->existingRowsProvider->iterateAllKeysInScope($metadata, $keyFields, $context->scope, $context->chunkSize);
+        } elseif ($this->existingRowsProvider instanceof StreamedExistingKeysProviderInterface) {
             $batches = $this->existingRowsProvider->iterateAllKeys($metadata, $keyFields, $context->chunkSize);
         } else {
             $allRows = $this->existingRowsProvider->fetchAllKeys($metadata, $keyFields);

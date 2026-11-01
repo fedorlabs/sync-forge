@@ -26,6 +26,30 @@ final class SyncBuilderTest extends TestCase
         $builder->run();
     }
 
+    public function testScopeIsPassedToContext(): void
+    {
+        $pipeline = new CapturingPipeline();
+        (new SyncBuilder($pipeline, EntityStub::class))
+            ->key(['external_id'])->source([])->scope(['supplier_id' => 42, 'archived' => null])->run();
+
+        self::assertSame(['supplier_id' => 42, 'archived' => null], $pipeline->lastContext?->scope);
+    }
+
+    public function testScopeRejectsNonScalarValue(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('must be scalar or null');
+
+        (new SyncBuilder(new CapturingPipeline(), EntityStub::class))->scope(['supplier_id' => [42]]);
+    }
+
+    public function testScopeRejectsListOfValues(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+
+        (new SyncBuilder(new CapturingPipeline(), EntityStub::class))->scope([42]);
+    }
+
     public function testRunWithoutSourceThrows(): void
     {
         $builder = new SyncBuilder(new CapturingPipeline(), EntityStub::class);
