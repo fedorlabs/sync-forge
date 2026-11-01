@@ -50,6 +50,41 @@ final class SyncBuilderTest extends TestCase
         (new SyncBuilder(new CapturingPipeline(), EntityStub::class))->scope([42]);
     }
 
+    public function testWriteTimeOptionsArePassedToContext(): void
+    {
+        $pipeline = new CapturingPipeline();
+        (new SyncBuilder($pipeline, EntityStub::class))
+            ->key(['external_id'])->source([])
+            ->setOnInsert(['created_at' => 'T0'])
+            ->touchOnChange('updated_at')
+            ->touchOnChange('price_updated_at', ['price'], 'T1')
+            ->returnUpdated()->returnDeleted()->run();
+
+        $context = $pipeline->lastContext;
+        self::assertNotNull($context);
+        self::assertSame(['created_at' => 'T0'], $context->insertDefaults);
+        self::assertTrue($context->returnUpdated);
+        self::assertTrue($context->returnDeleted);
+        self::assertSame('updated_at', $context->touchRules[0]->field);
+        self::assertNull($context->touchRules[0]->watchedFields);
+        self::assertSame(['price'], $context->touchRules[1]->watchedFields);
+        self::assertSame('T1', $context->touchRules[1]->value);
+    }
+
+    public function testTouchOnChangeRejectsEmptyWatchedList(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+
+        (new SyncBuilder(new CapturingPipeline(), EntityStub::class))->touchOnChange('updated_at', []);
+    }
+
+    public function testSetOnInsertRejectsListOfValues(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+
+        (new SyncBuilder(new CapturingPipeline(), EntityStub::class))->setOnInsert(['x']);
+    }
+
     public function testRunWithoutSourceThrows(): void
     {
         $builder = new SyncBuilder(new CapturingPipeline(), EntityStub::class);

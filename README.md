@@ -25,7 +25,8 @@ PostgreSQL `ON CONFLICT` also requires a matching unique constraint or index.
 - Dry-run mode
 - `continueOnError` with typed error entries in `SyncResult`
 - `scope()` to limit lookups and deletion to a subset of the table
-- `returnInserted()` to get the keys and generated ids of inserted rows
+- `returnInserted()`, `returnUpdated()`, `returnDeleted()` to get the keys (and ids) of changed rows
+- `setOnInsert()` and `touchOnChange()` for constructor defaults and modification timestamps
 
 ## Requirements
 
@@ -152,13 +153,41 @@ The scope fields have to be in the key because rows are looked up inside the sco
 key such as `sku` alone, a row of another scope with the same `sku` is not found, planned as an
 insert, and the upsert would then take that row over. The run is rejected before anything is written.
 
+### Timestamps and constructor defaults
+
+SyncForge writes through DBAL and does not call entity setters, so values that a constructor or a
+setter used to set have to be declared:
+
+```php
+$result = $syncForge->for(Product::class)
+    ->key(['sku'])
+    ->source($rows)
+    ->setOnInsert(['createdAt' => new DateTimeImmutable(), 'updatedAt' => new DateTimeImmutable(), 'isNew' => false])
+    ->touchOnChange('updatedAt')                                  // any change
+    ->touchOnChange('priceUpdatedAt', ['price'])                  // only when the price changed
+    ->touchOnChange('stockUpdatedAt', ['stock'])
+    ->run();
+```
+
+- `setOnInsert()` fills fields that the source row does not carry, on inserted rows only. A value from
+  the source always wins. A `Closure` is evaluated once per run.
+- `touchOnChange($field, $watched = '*', $value = null)` sets `$field` on an updated row when one of
+  the watched fields changed, so unchanged rows stay untouched. The value defaults to the start of the
+  run (the same for every row); pass a value or a `Closure` to override. Call it once per field.
+  A value for `$field` in the source row wins. `'*'` watches every changed field, and a rule never
+  reacts to fields set by other `touchOnChange()` rules.
+- Every field must be mapped; otherwise the run fails with `MetadataException`.
+
 ### Chaining child records
 
 `returnInserted()` fills `SyncResult::$insertedKeys` with the key fields and identifier fields
 of every inserted row, read back from the database after each chunk, so generated ids can be
 used to insert child rows. In a dry run only the key fields of the planned inserts are returned.
 The list is kept in memory for the whole run, so enable it only when the number of inserted
-rows is manageable.
+rows is manageable. `returnUpdated()` fills `SyncResult::$updatedKeys` the same way (key and
+identifier fields of rows that changed, with the identifiers as they are in the database, also in a
+dry run), and `returnDeleted()` fills `SyncResult::$deletedKeys` with the key fields of rows removed
+by `deleteMissing`. Use them to reindex search or invalidate caches for exactly the changed rows.
 
 ```php
 $result = $syncForge->for(Part::class)

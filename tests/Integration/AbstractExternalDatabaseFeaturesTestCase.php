@@ -202,9 +202,64 @@ abstract class AbstractExternalDatabaseFeaturesTestCase extends TestCase
     /**
      * @throws Exception
      */
+    public function testSetOnInsertTouchOnChangeAndReturnedKeys(): void
+    {
+        $connection = $this->requireConnection();
+        $connection->executeStatement(sprintf(
+            'CREATE TABLE sf_stocks (%s, sku VARCHAR(64) NOT NULL UNIQUE, price INT NOT NULL, qty INT NOT NULL, created_at %s NOT NULL, updated_at %s NOT NULL, price_updated_at %s NULL)',
+            $this->generatedIdColumnSql(),
+            $this->dateTimeColumnSql(),
+            $this->dateTimeColumnSql(),
+            $this->dateTimeColumnSql(),
+        ));
+        $type = $this->dateTimeDbalType();
+        $sync = $this->buildSync(new EntityMetadata(
+            ExternalStockStub::class,
+            'sf_stocks',
+            ['id', 'sku', 'price', 'qty', 'created_at', 'updated_at', 'price_updated_at'],
+            ['id' => 'id', 'sku' => 'sku', 'price' => 'price', 'qty' => 'qty', 'created_at' => 'created_at', 'updated_at' => 'updated_at', 'price_updated_at' => 'price_updated_at'],
+            ['id'],
+            ['price', 'qty'],
+            ['created_at' => $type, 'updated_at' => $type, 'price_updated_at' => $type],
+        ));
+        $run = static fn (array $rows, bool $deleteMissing = false) => $sync->for(ExternalStockStub::class)->key(['sku'])
+            ->source($rows)
+            ->setOnInsert(['created_at' => new DateTimeImmutable('2024-06-01 10:00:00'), 'updated_at' => new DateTimeImmutable('2024-06-01 10:00:00')])
+            ->touchOnChange('updated_at')
+            ->touchOnChange('price_updated_at', ['price'])
+            ->returnInserted()->returnUpdated()->returnDeleted()
+            ->deleteMissing($deleteMissing)->run();
+
+        $first = $run([['sku' => 'A', 'price' => 10, 'qty' => 1], ['sku' => 'B', 'price' => 20, 'qty' => 2], ['sku' => 'C', 'price' => 30, 'qty' => 3]]);
+        self::assertSame(3, $first->inserted);
+        self::assertCount(3, $first->insertedKeys);
+
+        $second = $run([['sku' => 'A', 'price' => 10, 'qty' => 1], ['sku' => 'B', 'price' => 25, 'qty' => 2], ['sku' => 'C', 'price' => 30, 'qty' => 9]]);
+        self::assertSame(2, $second->updated);
+        self::assertSame(1, $second->unchanged);
+        self::assertSame(['B', 'C'], array_map(static fn (array $key): string => $key['sku'], $second->updatedKeys));
+        self::assertSame(
+            array_map(static fn (array $row): int => (int) $row['id'], $connection->fetchAllAssociative("SELECT id FROM sf_stocks WHERE sku IN ('B', 'C') ORDER BY sku")),
+            array_map(static fn (array $key): int => (int) $key['id'], $second->updatedKeys),
+        );
+
+        $touched = [];
+        foreach ($connection->fetchAllAssociative('SELECT sku, updated_at <> created_at AS updated, price_updated_at IS NOT NULL AS price_touched FROM sf_stocks ORDER BY sku') as $row) {
+            $touched[$row['sku']] = [(bool) $row['updated'], (bool) $row['price_touched']];
+        }
+        self::assertSame(['A' => [false, false], 'B' => [true, true], 'C' => [true, false]], $touched);
+
+        $third = $run([['sku' => 'A', 'price' => 10, 'qty' => 1]], deleteMissing: true);
+        self::assertSame(2, $third->deleted);
+        self::assertSame([['sku' => 'B'], ['sku' => 'C']], $third->deletedKeys);
+    }
+
+    /**
+     * @throws Exception
+     */
     private function dropTables(): void
     {
-        foreach (['sf_prices', 'sf_items', 'sf_parts', 'sf_events'] as $table) {
+        foreach (['sf_prices', 'sf_items', 'sf_parts', 'sf_events', 'sf_stocks'] as $table) {
             $this->requireConnection()->executeStatement(sprintf('DROP TABLE IF EXISTS %s', $table));
         }
     }
@@ -285,6 +340,10 @@ final class ExternalItemStub
 }
 
 final class ExternalPartStub
+{
+}
+
+final class ExternalStockStub
 {
 }
 

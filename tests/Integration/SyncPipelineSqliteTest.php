@@ -517,6 +517,72 @@ final class SyncPipelineSqliteTest extends TestCase
         self::assertSame($result->insertedKeys, $result->toArray()['insertedKeys']);
     }
 
+    public function testSetOnInsertTouchOnChangeAndReturnedKeys(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $connection->executeStatement('CREATE TABLE stocks (id INTEGER PRIMARY KEY AUTOINCREMENT, sku TEXT NOT NULL UNIQUE, price INTEGER NOT NULL, qty INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, price_updated_at TEXT NULL)');
+        $metadata = new EntityMetadata(
+            SqliteStockLevelStub::class,
+            'stocks',
+            ['id', 'sku', 'price', 'qty', 'created_at', 'updated_at', 'price_updated_at'],
+            ['id' => 'id', 'sku' => 'sku', 'price' => 'price', 'qty' => 'qty', 'created_at' => 'created_at', 'updated_at' => 'updated_at', 'price_updated_at' => 'price_updated_at'],
+            ['id'],
+            ['price', 'qty'],
+            ['created_at' => 'datetime_immutable', 'updated_at' => 'datetime_immutable', 'price_updated_at' => 'datetime_immutable'],
+        );
+        $keyResolver = new CompositeKeyResolver();
+        $sync = new SyncForge(
+            metadataProvider: new InMemoryEntityMetadataProvider([SqliteStockLevelStub::class => $metadata]),
+            keyResolver: $keyResolver,
+            executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
+            platformDetector: new DbalPlatformDetector($connection),
+            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+        );
+        $run = static fn (array $rows, bool $deleteMissing = false) => $sync->for(SqliteStockLevelStub::class)->key(['sku'])
+            ->source($rows)
+            ->setOnInsert(['created_at' => static fn (): \DateTimeImmutable => new \DateTimeImmutable('2024-06-01 10:00:00'), 'updated_at' => new \DateTimeImmutable('2024-06-01 10:00:00')])
+            ->touchOnChange('updated_at', '*', new \DateTimeImmutable('2024-06-02 11:00:00'))
+            ->touchOnChange('price_updated_at', ['price'], new \DateTimeImmutable('2024-06-02 11:00:00'))
+            ->returnInserted()->returnUpdated()->returnDeleted()
+            ->deleteMissing($deleteMissing)->run();
+
+        $first = $run([['sku' => 'A', 'price' => 10, 'qty' => 1], ['sku' => 'B', 'price' => 20, 'qty' => 2], ['sku' => 'C', 'price' => 30, 'qty' => 3]]);
+        self::assertSame(3, $first->inserted);
+        self::assertSame('2024-06-01 10:00:00', $connection->fetchOne("SELECT created_at FROM stocks WHERE sku = 'A'"));
+        self::assertNull($connection->fetchOne("SELECT price_updated_at FROM stocks WHERE sku = 'A'"));
+
+        $second = $run([['sku' => 'A', 'price' => 10, 'qty' => 1], ['sku' => 'B', 'price' => 25, 'qty' => 2], ['sku' => 'C', 'price' => 30, 'qty' => 9], ['sku' => 'D', 'price' => 40, 'qty' => 4]]);
+        self::assertSame(1, $second->inserted);
+        self::assertSame(2, $second->updated);
+        self::assertSame(1, $second->unchanged);
+        $stamps = [];
+        foreach ($connection->fetchAllAssociative('SELECT sku, updated_at, price_updated_at FROM stocks ORDER BY sku') as $row) {
+            $stamps[$row['sku']] = [$row['updated_at'], $row['price_updated_at']];
+        }
+        self::assertSame(
+            ['A' => ['2024-06-01 10:00:00', null], 'B' => ['2024-06-02 11:00:00', '2024-06-02 11:00:00'], 'C' => ['2024-06-02 11:00:00', null], 'D' => ['2024-06-01 10:00:00', null]],
+            $stamps,
+        );
+        self::assertSame([['sku' => 'D', 'id' => 4]], $second->insertedKeys);
+        self::assertSame([['sku' => 'B', 'id' => 2], ['sku' => 'C', 'id' => 3]], $second->updatedKeys);
+
+        $third = $run([['sku' => 'A', 'price' => 10, 'qty' => 1], ['sku' => 'D', 'price' => 40, 'qty' => 4]], deleteMissing: true);
+        self::assertSame(2, $third->deleted);
+        self::assertSame([['sku' => 'B'], ['sku' => 'C']], $third->deletedKeys);
+    }
+
+    public function testWriteTimeFieldOutsideMetadataIsRejected(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $sync = $this->buildPriceSync($connection);
+
+        $this->expectException(MetadataException::class);
+        $this->expectExceptionMessage('"no_such_field" is not mapped');
+
+        $sync->for(SqliteScopedPriceStub::class)->key(['supplier_id', 'sku'])
+            ->source([['supplier_id' => 1, 'sku' => 'A', 'price' => 1]])->touchOnChange('no_such_field')->run();
+    }
+
     public function testScopeLimitsDeleteMissingToOneSupplier(): void
     {
         $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
@@ -675,6 +741,10 @@ final class SqliteStockStub
 }
 
 final class SqlitePartStub
+{
+}
+
+final class SqliteStockLevelStub
 {
 }
 

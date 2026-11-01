@@ -6,6 +6,7 @@ namespace SyncForge\Fluent;
 
 use SyncForge\Exception\InvalidConfigurationException;
 use SyncForge\Pipeline\SyncPipelineInterface;
+use SyncForge\Pipeline\TouchRule;
 use SyncForge\Report\SyncResult;
 use SyncForge\SyncContext;
 
@@ -22,6 +23,12 @@ final class SyncBuilder
     /** @var array<string,scalar|null> */
     private array $scope = [];
     private bool $returnInserted = false;
+    private bool $returnUpdated = false;
+    private bool $returnDeleted = false;
+    /** @var array<string,mixed> */
+    private array $insertDefaults = [];
+    /** @var list<TouchRule> */
+    private array $touchRules = [];
 
     public function __construct(
         private readonly SyncPipelineInterface $pipeline,
@@ -103,6 +110,80 @@ final class SyncBuilder
     }
 
     /**
+     * Collects the key and identifier fields of updated rows into SyncResult::$updatedKeys.
+     */
+    public function returnUpdated(bool $enabled = true): self
+    {
+        $this->returnUpdated = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * Collects the key fields of rows removed by deleteMissing into SyncResult::$deletedKeys.
+     */
+    public function returnDeleted(bool $enabled = true): self
+    {
+        $this->returnDeleted = $enabled;
+
+        return $this;
+    }
+
+    /**
+     * Sets fields on inserted rows that do not carry them, for values the database does not default
+     * and the entity constructor used to set (for example created_at). A Closure is evaluated once
+     * per run, so all rows get the same value. Values from the source row always win.
+     *
+     * @param array<array-key,mixed> $values field => value
+     */
+    public function setOnInsert(array $values): self
+    {
+        foreach ($values as $field => $value) {
+            if (!is_string($field) || $field === '') {
+                throw new InvalidConfigurationException('setOnInsert() must map non-empty field names to values.');
+            }
+
+            $this->insertDefaults[$field] = $value;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Sets $field on an updated row when a watched field changed in the same update, like an entity
+     * setter that stamps a modification time. Watch a list of fields, or '*' for any change. The value
+     * defaults to the start of the run; a Closure is evaluated once per run. A value from the source
+     * row for $field wins. Call it once per field to touch.
+     *
+     * @param array<array-key,mixed>|string $watched
+     */
+    public function touchOnChange(string $field, array|string $watched = '*', mixed $value = null): self
+    {
+        if ($field === '') {
+            throw new InvalidConfigurationException('touchOnChange() field cannot be empty.');
+        }
+
+        $fields = null;
+        if ($watched !== '*') {
+            $fields = [];
+            foreach (is_array($watched) ? $watched : [] as $watchedField) {
+                if (!is_string($watchedField) || $watchedField === '') {
+                    throw new InvalidConfigurationException('touchOnChange() watched fields must be non-empty strings.');
+                }
+                $fields[] = $watchedField;
+            }
+
+            if ($fields === []) {
+                throw new InvalidConfigurationException("touchOnChange() watched must be '*' or a non-empty list of fields.");
+            }
+        }
+
+        $this->touchRules[] = new TouchRule($field, $fields, $value);
+
+        return $this;
+    }
+
+    /**
      * Limits the sync to rows matching these field values: existing rows are looked up and deleted only within
      * the scope, and the values are filled into inserted rows that do not carry them.
      *
@@ -149,6 +230,10 @@ final class SyncBuilder
             continueOnError: $this->continueOnError,
             scope: $this->scope,
             returnInserted: $this->returnInserted,
+            insertDefaults: $this->insertDefaults,
+            touchRules: $this->touchRules,
+            returnUpdated: $this->returnUpdated,
+            returnDeleted: $this->returnDeleted,
         ));
     }
 }
