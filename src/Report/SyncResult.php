@@ -12,6 +12,7 @@ final class SyncResult
     /**
      * @param list<string> $warnings
      * @param list<ErrorEntry> $errors
+     * @param list<array<string,mixed>> $insertedKeys key and identifier fields of inserted rows, filled with returnInserted()
      */
     public function __construct(
         public readonly string $entityClass,
@@ -26,6 +27,7 @@ final class SyncResult
         public readonly bool $dryRun,
         public readonly array $warnings = [],
         public readonly array $errors = [],
+        public readonly array $insertedKeys = [],
     ) {
     }
 
@@ -52,6 +54,7 @@ final class SyncResult
             'chunkCount' => $this->chunkCount,
             'dryRun' => $this->dryRun,
             'warnings' => $this->warnings,
+            'insertedKeys' => $this->insertedKeys,
             'errors' => array_map(
                 static fn (ErrorEntry $e): array => [
                     'type' => $e->type,

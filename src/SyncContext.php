@@ -20,6 +20,7 @@ final class SyncContext
         public readonly bool $dryRun,
         public readonly bool $continueOnError = false,
         public readonly array $scope = [],
+        public readonly bool $returnInserted = false,
     ) {
     }
 }

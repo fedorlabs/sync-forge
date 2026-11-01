@@ -25,6 +25,7 @@ PostgreSQL `ON CONFLICT` also requires a matching unique constraint or index.
 - Dry-run mode
 - `continueOnError` with typed error entries in `SyncResult`
 - `scope()` to limit lookups and deletion to a subset of the table
+- `returnInserted()` to get the keys and generated ids of inserted rows
 
 ## Requirements
 
@@ -145,6 +146,26 @@ $result = $syncForge->for(Price::class)
 Scope fields must be mapped, values must be scalar or `null`, and the existing rows provider
 must implement `ScopedExistingRowsProviderInterface` (the DBAL one does); otherwise the run
 fails instead of reading or deleting rows outside the scope.
+
+### Chaining child records
+
+`returnInserted()` fills `SyncResult::$insertedKeys` with the key fields and identifier fields
+of every inserted row, read back from the database after each chunk, so generated ids can be
+used to insert child rows. In a dry run only the key fields of the planned inserts are returned.
+The list is kept in memory for the whole run, so enable it only when the number of inserted
+rows is manageable.
+
+```php
+$result = $syncForge->for(Part::class)
+    ->key(['sku'])
+    ->source($rows)
+    ->returnInserted()
+    ->run();
+
+foreach ($result->insertedKeys as $row) {
+    // ['sku' => 'B-2', 'id' => 17]
+}
+```
 
 ### Dry-run before delete
 
