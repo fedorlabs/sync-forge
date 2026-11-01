@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace SyncForge;
 
+use Closure;
 use SyncForge\Pipeline\TouchRule;
+use SyncForge\Report\ChunkResult;
 
 final class SyncContext
 {
@@ -14,6 +16,9 @@ final class SyncContext
      * @param array<string,scalar|null> $scope field => value limiting existing rows, deleteMissing and inserted values
      * @param array<string,mixed> $insertDefaults field => value (or Closure evaluated once per run) set on inserted rows that lack the field
      * @param list<TouchRule> $touchRules fields set on updated rows when watched fields changed
+     * @param list<string>|null $updateFields when set, only these fields are compared and updated
+     * @param array<string,mixed> $markMissing field => value written to rows missing from the source instead of deleting them
+     * @param (Closure(ChunkResult): void)|null $onChunk
      */
     public function __construct(
         public readonly string $entityClass,
@@ -29,6 +34,11 @@ final class SyncContext
         public readonly array $touchRules = [],
         public readonly bool $returnUpdated = false,
         public readonly bool $returnDeleted = false,
+        public readonly ?array $updateFields = null,
+        public readonly bool $insertMissing = true,
+        public readonly bool $updateExisting = true,
+        public readonly array $markMissing = [],
+        public readonly ?Closure $onChunk = null,
     ) {
     }
 }

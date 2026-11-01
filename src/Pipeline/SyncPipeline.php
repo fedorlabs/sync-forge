@@ -15,11 +15,13 @@ use SyncForge\Exception\MetadataException;
 use SyncForge\Exception\SyncExecutionException;
 use SyncForge\Executor\BulkExecutorFactory;
 use SyncForge\Executor\BulkExecutorInterface;
+use SyncForge\Executor\DatabasePlatformContext;
 use SyncForge\Executor\ExecutionContext;
 use SyncForge\Executor\PlatformDetectorInterface;
 use SyncForge\Key\KeyResolverInterface;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Metadata\EntityMetadataProviderInterface;
+use SyncForge\Report\ChunkResult;
 use SyncForge\Report\ErrorEntry;
 use SyncForge\Report\SyncResult;
 use SyncForge\SyncContext;
@@ -44,6 +46,9 @@ final class SyncPipeline implements SyncPipelineInterface
         $this->validateKeyFields($metadata, $context->keyFields);
         $this->validateScope($metadata, $context->keyFields, $context->scope);
         $this->validateWriteTimeFields($metadata, $context);
+        $this->validateUpdateAndMarkFields($metadata, $context);
+        $diffMetadata = $context->updateFields !== null ? $metadata->withUpdatableFields($context->updateFields) : $metadata;
+        $missingAction = $context->deleteMissing || $context->markMissing !== [];
         $enricher = new PlanEnricher($context, $startedAt);
         $keyProjection = array_values(array_unique([...$context->keyFields, ...$metadata->identifierFields]));
 
@@ -66,6 +71,10 @@ final class SyncPipeline implements SyncPipelineInterface
         $updatedKeys = [];
         /** @var list<array<string,mixed>> $deletedKeys */
         $deletedKeys = [];
+        $skipped = 0;
+        $marked = 0;
+        /** @var list<array<string,mixed>> $markedKeys */
+        $markedKeys = [];
 
         foreach (ChunkIterator::fromIterable($context->source, $context->chunkSize) as $index => $chunkRows) {
             $chunkCount++;
@@ -100,8 +109,18 @@ final class SyncPipeline implements SyncPipelineInterface
                 $plan = $this->diffEngine->diff(
                     $incomingIndex->rowsByKey,
                     $existingIndex->rowsByKey,
-                    new DiffContext($metadata, $context->keyFields, $platformContext->platform),
+                    new DiffContext($diffMetadata, $context->keyFields, $platformContext->platform),
                 );
+
+                $chunkSkipped = 0;
+                if (!$context->insertMissing && $plan->inserts !== []) {
+                    $chunkSkipped += count($plan->inserts);
+                    $plan = new DiffPlan([], $plan->updates, $plan->deletes, $plan->unchanged);
+                }
+                if (!$context->updateExisting && $plan->updates !== []) {
+                    $chunkSkipped += count($plan->updates);
+                    $plan = new DiffPlan($plan->inserts, [], $plan->deletes, $plan->unchanged);
+                }
 
                 $plan = $enricher->enrich($plan);
 
@@ -126,24 +145,40 @@ final class SyncPipeline implements SyncPipelineInterface
                 $updated += $executionResult->updated;
                 $deleted += $executionResult->deleted;
                 $unchanged += $plan->unchanged;
+                $skipped += $chunkSkipped;
+
+                $this->reportChunk($context, new ChunkResult(
+                    chunkIndex: $index,
+                    rows: count($chunkRows),
+                    inserted: $executionResult->inserted,
+                    updated: $executionResult->updated,
+                    unchanged: $plan->unchanged,
+                    skipped: $chunkSkipped,
+                    processedRows: $processedRows,
+                ));
             } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
                 }
-                $errors[] = new ErrorEntry(
+                $error = new ErrorEntry(
                     type: $this->classifyException($e),
                     message: $e->getMessage(),
                     chunkIndex: $index,
                 );
+                $errors[] = $error;
+                $this->reportChunk($context, new ChunkResult($index, count($chunkRows), 0, 0, 0, 0, $processedRows, $error));
             }
         }
 
-        if ($context->deleteMissing && $errors !== []) {
-            $warnings[] = 'deleteMissing skipped because one or more chunks failed.';
-        } elseif ($context->deleteMissing) {
+        $missingName = $context->deleteMissing ? 'deleteMissing' : 'markMissing';
+        if ($missingAction && $errors !== []) {
+            $warnings[] = $missingName . ' skipped because one or more chunks failed.';
+        } elseif ($missingAction) {
             if ($processedRows === 0) {
                 throw new InvalidConfigurationException(
-                    'deleteMissing=true with an empty source is blocked to prevent full-table deletion.',
+                    $context->deleteMissing
+                        ? 'deleteMissing=true with an empty source is blocked to prevent full-table deletion.'
+                        : 'markMissing with an empty source is blocked to prevent marking the whole table.',
                 );
             }
 
@@ -154,9 +189,15 @@ final class SyncPipeline implements SyncPipelineInterface
                     incomingKeySet: $incomingKeySet,
                     executor: $executor,
                     context: $context,
+                    diffMetadata: $diffMetadata,
+                    platformContext: $platformContext,
+                    enricher: $enricher,
+                    keyProjection: $keyProjection,
                 );
                 $deleted += $deletion['deleted'];
                 $deletedKeys = [...$deletedKeys, ...$deletion['keys']];
+                $marked += $deletion['marked'];
+                $markedKeys = [...$markedKeys, ...$deletion['marked_keys']];
             } catch (Throwable $e) {
                 if (!$context->continueOnError) {
                     throw $e;
@@ -186,6 +227,9 @@ final class SyncPipeline implements SyncPipelineInterface
             insertedKeys: $insertedKeys,
             updatedKeys: $updatedKeys,
             deletedKeys: $deletedKeys,
+            skipped: $skipped,
+            marked: $marked,
+            markedKeys: $markedKeys,
         );
     }
 
@@ -314,6 +358,82 @@ final class SyncPipeline implements SyncPipelineInterface
         return $rows;
     }
 
+    /**
+     * Writes the markMissing values to rows missing from the source. The current rows are read back so
+     * that rows which already carry the values are not rewritten, and touchOnChange() rules apply.
+     *
+     * @param list<array<string,mixed>> $keyRows
+     * @param list<string> $keyProjection
+     * @return array{marked:int,keys:list<array<string,mixed>>}
+     */
+    private function markRows(
+        array $keyRows,
+        EntityMetadata $metadata,
+        SyncContext $context,
+        BulkExecutorInterface $executor,
+        DatabasePlatformContext $platformContext,
+        PlanEnricher $enricher,
+        array $keyProjection,
+    ): array {
+        $existingIndex = $this->keyResolver->indexByKey($this->fetchExistingRows($metadata, $context, $keyRows), $context->keyFields);
+
+        $incoming = [];
+        foreach ($existingIndex->rowsByKey as $key => $row) {
+            $incoming[$key] = $this->projectFields($row, $context->keyFields) + $context->markMissing;
+        }
+
+        $plan = $this->diffEngine->diff(
+            $incoming,
+            $existingIndex->rowsByKey,
+            new DiffContext($metadata->withUpdatableFields(array_keys($context->markMissing)), $context->keyFields, $platformContext->platform),
+        );
+        $plan = $enricher->enrich(new DiffPlan([], $plan->updates, [], 0));
+        if ($plan->updates === []) {
+            return ['marked' => 0, 'keys' => []];
+        }
+
+        $result = $executor->execute($plan, new ExecutionContext(
+            metadata: $metadata,
+            keyFields: $context->keyFields,
+            dryRun: $context->dryRun,
+            chunkIndex: null,
+        ));
+
+        $keys = [];
+        if ($context->returnDeleted) {
+            foreach ($plan->updates as $entry) {
+                $keys[] = $this->projectFields($existingIndex->rowsByKey[$entry->key] ?? $entry->row, $keyProjection);
+            }
+        }
+
+        return ['marked' => $result->updated, 'keys' => $keys];
+    }
+
+    private function reportChunk(SyncContext $context, ChunkResult $result): void
+    {
+        if ($context->onChunk !== null) {
+            ($context->onChunk)($result);
+        }
+    }
+
+    private function validateUpdateAndMarkFields(EntityMetadata $metadata, SyncContext $context): void
+    {
+        if ($context->deleteMissing && $context->markMissing !== []) {
+            throw new InvalidConfigurationException('deleteMissing and markMissing cannot be combined.');
+        }
+
+        $fields = $context->updateFields ?? [];
+        $markFields = array_keys($context->markMissing);
+        foreach ([...$fields, ...$markFields] as $field) {
+            if (!in_array($field, $metadata->fields, true)) {
+                throw new MetadataException(sprintf('Field "%s" is not mapped for %s.', $field, $metadata->entityClass));
+            }
+            if (in_array($field, $context->keyFields, true)) {
+                throw new InvalidConfigurationException(sprintf('Field "%s" is part of the sync key and cannot be updated or marked.', $field));
+            }
+        }
+    }
+
     private function validateWriteTimeFields(EntityMetadata $metadata, SyncContext $context): void
     {
         $fields = array_keys($context->insertDefaults);
@@ -346,7 +466,8 @@ final class SyncPipeline implements SyncPipelineInterface
     /**
      * @param list<string> $keyFields
      * @param array<string,bool> $incomingKeySet
-     * @return array{deleted:int,keys:list<array<string,mixed>>}
+     * @param list<string> $keyProjection
+     * @return array{deleted:int,keys:list<array<string,mixed>>,marked:int,marked_keys:list<array<string,mixed>>}
      */
     private function executeDeleteMissing(
         EntityMetadata $metadata,
@@ -354,9 +475,15 @@ final class SyncPipeline implements SyncPipelineInterface
         array $incomingKeySet,
         BulkExecutorInterface $executor,
         SyncContext $context,
+        EntityMetadata $diffMetadata,
+        DatabasePlatformContext $platformContext,
+        PlanEnricher $enricher,
+        array $keyProjection,
     ): array {
         $deleted = 0;
         $deletedKeys = [];
+        $marked = 0;
+        $markedKeys = [];
 
         if ($this->existingRowsProvider instanceof ScopedExistingRowsProviderInterface && $context->scope !== []) {
             $batches = $this->existingRowsProvider->iterateAllKeysInScope($metadata, $keyFields, $context->scope, $context->chunkSize);
@@ -384,6 +511,14 @@ final class SyncPipeline implements SyncPipelineInterface
                 continue;
             }
 
+            if ($context->markMissing !== []) {
+                $marking = $this->markRows($toDelete, $metadata, $context, $executor, $platformContext, $enricher, $keyProjection);
+                $marked += $marking['marked'];
+                $markedKeys = [...$markedKeys, ...$marking['keys']];
+
+                continue;
+            }
+
             $executionResult = $executor->execute(
                 new DiffPlan(inserts: [], updates: [], deletes: $toDelete, unchanged: 0),
                 new ExecutionContext(
@@ -402,7 +537,7 @@ final class SyncPipeline implements SyncPipelineInterface
             }
         }
 
-        return ['deleted' => $deleted, 'keys' => $deletedKeys];
+        return ['deleted' => $deleted, 'keys' => $deletedKeys, 'marked' => $marked, 'marked_keys' => $markedKeys];
     }
 
     private function classifyException(Throwable $e): string

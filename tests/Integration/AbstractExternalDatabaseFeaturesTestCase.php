@@ -45,6 +45,9 @@ abstract class AbstractExternalDatabaseFeaturesTestCase extends TestCase
     /** @return string DBAL type name matching dateTimeColumnSql() */
     abstract protected function dateTimeDbalType(): string;
 
+    /** @return string SQL type of a boolean column */
+    abstract protected function booleanColumnSql(): string;
+
     /**
      * @throws Exception
      */
@@ -257,9 +260,67 @@ abstract class AbstractExternalDatabaseFeaturesTestCase extends TestCase
     /**
      * @throws Exception
      */
+    public function testMarkMissingUpdateFieldsAndBooleanComparison(): void
+    {
+        $connection = $this->requireConnection();
+        $connection->executeStatement(sprintf(
+            'CREATE TABLE sf_catalog (sku VARCHAR(64) PRIMARY KEY, name VARCHAR(255) NOT NULL, price INT NOT NULL, is_active %s NOT NULL, updated_at %s NULL)',
+            $this->booleanColumnSql(),
+            $this->dateTimeColumnSql(),
+        ));
+        $sync = $this->buildSync(new EntityMetadata(
+            ExternalCatalogStub::class,
+            'sf_catalog',
+            ['sku', 'name', 'price', 'is_active', 'updated_at'],
+            ['sku' => 'sku', 'name' => 'name', 'price' => 'price', 'is_active' => 'is_active', 'updated_at' => 'updated_at'],
+            ['sku'],
+            ['name', 'price', 'is_active'],
+            ['is_active' => 'boolean', 'price' => 'integer', 'updated_at' => $this->dateTimeDbalType()],
+        ));
+        $row = static fn (string $sku, string $name = 'n', int $price = 1): array => ['sku' => $sku, 'name' => $name, 'price' => $price, 'is_active' => true];
+        $run = static fn (array $rows) => $sync->for(ExternalCatalogStub::class)->key(['sku'])->source($rows)
+            ->markMissing(['is_active' => false])
+            ->touchOnChange('updated_at')
+            ->returnDeleted()->run();
+
+        self::assertSame(3, $run([$row('A'), $row('B'), $row('C')])->inserted);
+
+        $second = $run([$row('A'), $row('B')]);
+        self::assertSame(2, $second->unchanged);
+        self::assertSame(1, $second->marked);
+        self::assertSame([['sku' => 'C']], array_map(static fn (array $key): array => ['sku' => $key['sku']], $second->markedKeys));
+
+        $third = $run([$row('A'), $row('B')]);
+        self::assertSame(0, $third->marked);
+        self::assertSame(2, $third->unchanged);
+        self::assertSame(['A' => true, 'B' => true, 'C' => false], $this->activeBySku($connection));
+        self::assertSame(1, (int) $connection->fetchOne("SELECT COUNT(*) FROM sf_catalog WHERE sku = 'C' AND updated_at IS NOT NULL"));
+
+        $priceOnly = $sync->for(ExternalCatalogStub::class)->key(['sku'])
+            ->source([$row('A', 'Renamed', 5)])->updateFields(['price'])->insertMissing(false)->run();
+        self::assertSame(1, $priceOnly->updated);
+        self::assertSame(['name' => 'n', 'price' => 5], $connection->fetchAssociative("SELECT name, price FROM sf_catalog WHERE sku = 'A'"));
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function activeBySku(Connection $connection): array
+    {
+        $state = [];
+        foreach ($connection->fetchAllAssociative('SELECT sku, is_active FROM sf_catalog ORDER BY sku') as $row) {
+            $state[$row['sku']] = filter_var($row['is_active'], FILTER_VALIDATE_BOOLEAN);
+        }
+
+        return $state;
+    }
+
+    /**
+     * @throws Exception
+     */
     private function dropTables(): void
     {
-        foreach (['sf_prices', 'sf_items', 'sf_parts', 'sf_events', 'sf_stocks'] as $table) {
+        foreach (['sf_prices', 'sf_items', 'sf_parts', 'sf_events', 'sf_stocks', 'sf_catalog'] as $table) {
             $this->requireConnection()->executeStatement(sprintf('DROP TABLE IF EXISTS %s', $table));
         }
     }
@@ -340,6 +401,10 @@ final class ExternalItemStub
 }
 
 final class ExternalPartStub
+{
+}
+
+final class ExternalCatalogStub
 {
 }
 

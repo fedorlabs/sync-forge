@@ -6,6 +6,7 @@ namespace SyncForge\Bridge\DoctrineDbal;
 
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception;
+use Doctrine\DBAL\ParameterType;
 use SyncForge\Diff\DiffPlan;
 use SyncForge\Executor\BulkExecutorInterface;
 use SyncForge\Executor\DatabasePlatformContext;
@@ -48,7 +49,7 @@ final class DbalFallbackBatchExecutor implements BulkExecutorInterface
                 if ($payload === []) {
                     continue;
                 }
-                $this->connection->insert($context->metadata->tableName, $payload);
+                $this->connection->insert($context->metadata->tableName, $payload, $this->typesFor($payload));
                 $inserted++;
             }
 
@@ -64,7 +65,7 @@ final class DbalFallbackBatchExecutor implements BulkExecutorInterface
                     continue;
                 }
 
-                $this->connection->update($context->metadata->tableName, $data, $criteria);
+                $this->connection->update($context->metadata->tableName, $data, $criteria, $this->typesFor([...$data, ...$criteria]));
                 $updated++;
             }
 
@@ -74,7 +75,7 @@ final class DbalFallbackBatchExecutor implements BulkExecutorInterface
                     continue;
                 }
 
-                $this->connection->delete($context->metadata->tableName, $criteria);
+                $this->connection->delete($context->metadata->tableName, $criteria, $this->typesFor($criteria));
                 $deleted++;
             }
 
@@ -120,5 +121,24 @@ final class DbalFallbackBatchExecutor implements BulkExecutorInterface
         }
 
         return $criteria;
+    }
+
+    /**
+     * Without explicit types DBAL binds every value as a string, which turns false into an empty string.
+     *
+     * @param array<string,mixed> $values
+     * @return array<string,ParameterType>
+     */
+    private function typesFor(array $values): array
+    {
+        return array_map(
+            static fn (mixed $value): ParameterType => match (true) {
+                $value === null => ParameterType::NULL,
+                is_int($value) => ParameterType::INTEGER,
+                is_bool($value) => ParameterType::BOOLEAN,
+                default => ParameterType::STRING,
+            },
+            $values,
+        );
     }
 }

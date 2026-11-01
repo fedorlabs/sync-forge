@@ -15,6 +15,7 @@ final class SyncResult
      * @param list<array<string,mixed>> $insertedKeys key and identifier fields of inserted rows, filled with returnInserted()
      * @param list<array<string,mixed>> $updatedKeys key and identifier fields of updated rows, filled with returnUpdated()
      * @param list<array<string,mixed>> $deletedKeys key fields of deleted rows, filled with returnDeleted()
+     * @param list<array<string,mixed>> $markedKeys key and identifier fields of rows marked by markMissing(), filled with returnDeleted()
      */
     public function __construct(
         public readonly string $entityClass,
@@ -32,6 +33,9 @@ final class SyncResult
         public readonly array $insertedKeys = [],
         public readonly array $updatedKeys = [],
         public readonly array $deletedKeys = [],
+        public readonly int $skipped = 0,
+        public readonly int $marked = 0,
+        public readonly array $markedKeys = [],
     ) {
     }
 
@@ -61,6 +65,9 @@ final class SyncResult
             'insertedKeys' => $this->insertedKeys,
             'updatedKeys' => $this->updatedKeys,
             'deletedKeys' => $this->deletedKeys,
+            'skipped' => $this->skipped,
+            'marked' => $this->marked,
+            'markedKeys' => $this->markedKeys,
             'errors' => array_map(
                 static fn (ErrorEntry $e): array => [
                     'type' => $e->type,

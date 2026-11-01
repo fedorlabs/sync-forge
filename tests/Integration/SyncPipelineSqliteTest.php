@@ -19,6 +19,7 @@ use SyncForge\Executor\BulkExecutorFactory;
 use SyncForge\Key\CompositeKeyResolver;
 use SyncForge\Metadata\EntityMetadata;
 use SyncForge\Metadata\InMemoryEntityMetadataProvider;
+use SyncForge\Report\ChunkResult;
 use SyncForge\Report\ErrorEntry;
 use SyncForge\SyncForge;
 
@@ -583,6 +584,139 @@ final class SyncPipelineSqliteTest extends TestCase
             ->source([['supplier_id' => 1, 'sku' => 'A', 'price' => 1]])->touchOnChange('no_such_field')->run();
     }
 
+    public function testUpdateFieldsModesAndProgressCallback(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $sync = $this->buildCatalogSync($connection);
+        $connection->insert('catalog', ['sku' => 'A', 'name' => 'Old A', 'price' => 10, 'is_active' => 1]);
+        $connection->insert('catalog', ['sku' => 'B', 'name' => 'Old B', 'price' => 20, 'is_active' => 1]);
+        $source = [
+            ['sku' => 'A', 'name' => 'New A', 'price' => 11, 'is_active' => true],
+            ['sku' => 'B', 'name' => 'Old B', 'price' => 20, 'is_active' => true],
+            ['sku' => 'C', 'name' => 'New C', 'price' => 30, 'is_active' => true],
+        ];
+
+        $priceOnly = $sync->for(SqliteCatalogStub::class)->key(['sku'])->source($source)
+            ->updateFields(['price'])->insertMissing(false)->returnUpdated()->run();
+        self::assertSame(0, $priceOnly->inserted);
+        self::assertSame(1, $priceOnly->updated);
+        self::assertSame(1, $priceOnly->skipped);
+        self::assertSame(1, $priceOnly->unchanged);
+        self::assertSame([['sku' => 'A']], $priceOnly->updatedKeys);
+        self::assertSame(['name' => 'Old A', 'price' => 11], $connection->fetchAssociative("SELECT name, price FROM catalog WHERE sku = 'A'"));
+
+        $progress = [];
+        $addOnly = $sync->for(SqliteCatalogStub::class)->key(['sku'])->source($source)->chunkSize(2)
+            ->updateExisting(false)
+            ->onChunk(static function (ChunkResult $chunk) use (&$progress): void {
+                $progress[] = [$chunk->chunkIndex, $chunk->rows, $chunk->inserted, $chunk->updated, $chunk->skipped, $chunk->processedRows];
+            })->run();
+        self::assertSame(1, $addOnly->inserted);
+        self::assertSame(1, $addOnly->skipped);
+        self::assertSame([[0, 2, 0, 0, 1, 2], [1, 1, 1, 0, 0, 3]], $progress);
+        self::assertSame('Old A', $connection->fetchOne("SELECT name FROM catalog WHERE sku = 'A'"));
+    }
+
+    public function testProgressCallbackReportsFailedChunks(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $sync = $this->buildCatalogSync($connection);
+        $reports = [];
+
+        $result = $sync->for(SqliteCatalogStub::class)->key(['sku'])->chunkSize(1)->continueOnError()
+            ->source([['sku' => 'A', 'name' => 'A', 'price' => 1, 'is_active' => true], ['sku' => 'B', 'name' => null, 'price' => 1, 'is_active' => true]])
+            ->onChunk(static function (ChunkResult $chunk) use (&$reports): void {
+                $reports[] = $chunk->isSuccess();
+            })->run();
+
+        self::assertFalse($result->isSuccess());
+        self::assertSame([true, false], $reports);
+    }
+
+    public function testMarkMissingFlagsRowsInsteadOfDeletingThem(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $sync = $this->buildCatalogSync($connection);
+        foreach ([['A', 1], ['B', 1], ['C', 0], ['D', 1]] as [$sku, $active]) {
+            $connection->insert('catalog', ['sku' => $sku, 'name' => 'n', 'price' => 1, 'is_active' => $active, 'updated_at' => 'old']);
+        }
+        $run = static fn (array $skus, bool $dryRun = false) => $sync->for(SqliteCatalogStub::class)->key(['sku'])
+            ->source(array_map(static fn (string $sku): array => ['sku' => $sku, 'name' => 'n', 'price' => 1, 'is_active' => true], $skus))
+            ->markMissing(['is_active' => false])
+            ->touchOnChange('updated_at', '*', 'now')
+            ->returnDeleted()->chunkSize(2)->dryRun($dryRun)->run();
+
+        $preview = $run(['A'], dryRun: true);
+        self::assertSame(2, $preview->marked);
+        self::assertSame(['A', 'B', 'D'], array_map('strval', $connection->fetchFirstColumn('SELECT sku FROM catalog WHERE is_active = 1 ORDER BY sku')));
+
+        $result = $run(['A']);
+        self::assertSame(0, $result->deleted);
+        self::assertSame(2, $result->marked);
+        self::assertSame([['sku' => 'B'], ['sku' => 'D']], array_map(static fn (array $key): array => ['sku' => $key['sku']], $result->markedKeys));
+        self::assertSame(4, (int) $connection->fetchOne('SELECT COUNT(*) FROM catalog'));
+        self::assertSame(
+            ['A' => [1, 'old'], 'B' => [0, 'now'], 'C' => [0, 'old'], 'D' => [0, 'now']],
+            $this->stateBySku($connection),
+        );
+
+        $again = $run(['A']);
+        self::assertSame(0, $again->marked);
+        self::assertSame(1, $again->unchanged);
+    }
+
+    public function testMarkMissingIsBlockedForEmptySourceAndKeyFieldsCannotBeUpdateFields(): void
+    {
+        $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+        $sync = $this->buildCatalogSync($connection);
+
+        try {
+            $sync->for(SqliteCatalogStub::class)->key(['sku'])->source([])->markMissing(['is_active' => false])->run();
+            self::fail('An empty source must block markMissing.');
+        } catch (InvalidConfigurationException $e) {
+            self::assertStringContainsString('markMissing with an empty source is blocked', $e->getMessage());
+        }
+
+        $this->expectException(InvalidConfigurationException::class);
+        $sync->for(SqliteCatalogStub::class)->key(['sku'])->source([['sku' => 'A']])->updateFields(['sku'])->run();
+    }
+
+    /**
+     * @return array<string,array{int,string}>
+     */
+    private function stateBySku(Connection $connection): array
+    {
+        $state = [];
+        foreach ($connection->fetchAllAssociative('SELECT sku, is_active, updated_at FROM catalog ORDER BY sku') as $row) {
+            $state[$row['sku']] = [(int) $row['is_active'], $row['updated_at']];
+        }
+
+        return $state;
+    }
+
+    private function buildCatalogSync(Connection $connection): SyncForge
+    {
+        $connection->executeStatement('CREATE TABLE catalog (sku TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NULL)');
+        $metadata = new EntityMetadata(
+            SqliteCatalogStub::class,
+            'catalog',
+            ['sku', 'name', 'price', 'is_active', 'updated_at'],
+            ['sku' => 'sku', 'name' => 'name', 'price' => 'price', 'is_active' => 'is_active', 'updated_at' => 'updated_at'],
+            ['sku'],
+            ['name', 'price', 'is_active'],
+            ['is_active' => 'boolean', 'price' => 'integer'],
+        );
+        $keyResolver = new CompositeKeyResolver();
+
+        return new SyncForge(
+            metadataProvider: new InMemoryEntityMetadataProvider([SqliteCatalogStub::class => $metadata]),
+            keyResolver: $keyResolver,
+            executorFactory: new BulkExecutorFactory([new DbalFallbackBatchExecutor($connection)]),
+            platformDetector: new DbalPlatformDetector($connection),
+            existingRowsProvider: new DbalExistingRowsProvider($connection, $keyResolver),
+        );
+    }
+
     public function testScopeLimitsDeleteMissingToOneSupplier(): void
     {
         $connection = DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
@@ -745,6 +879,10 @@ final class SqlitePartStub
 }
 
 final class SqliteStockLevelStub
+{
+}
+
+final class SqliteCatalogStub
 {
 }
 
