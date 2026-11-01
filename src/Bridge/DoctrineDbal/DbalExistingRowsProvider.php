@@ -13,10 +13,9 @@ use SyncForge\Exception\MetadataException;
 use SyncForge\Exception\SyncExecutionException;
 use SyncForge\Key\KeyResolverInterface;
 use SyncForge\Metadata\EntityMetadata;
-use SyncForge\Pipeline\ExistingRowsProviderInterface;
-use SyncForge\Pipeline\StreamedExistingKeysProviderInterface;
+use SyncForge\Pipeline\ScopedExistingRowsProviderInterface;
 
-final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, StreamedExistingKeysProviderInterface
+final class DbalExistingRowsProvider implements ScopedExistingRowsProviderInterface
 {
     private const COMPOSITE_KEY_BATCH_SIZE = 250;
     private const KEY_SCAN_BATCH_SIZE = 1000;
@@ -32,6 +31,26 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
      */
     public function fetchByIncomingRows(EntityMetadata $metadata, array $keyFields, array $incomingRows): array
     {
+        return $this->fetchRows($metadata, $keyFields, $incomingRows, []);
+    }
+
+    /**
+     * @throws Exception
+     */
+    public function fetchByIncomingRowsInScope(EntityMetadata $metadata, array $keyFields, array $incomingRows, array $scope): array
+    {
+        return $this->fetchRows($metadata, $keyFields, $incomingRows, $scope);
+    }
+
+    /**
+     * @param list<string> $keyFields
+     * @param list<array<string,mixed>> $incomingRows
+     * @param array<string,scalar|null> $scope
+     * @return list<array<string,mixed>>
+     * @throws Exception
+     */
+    private function fetchRows(EntityMetadata $metadata, array $keyFields, array $incomingRows, array $scope): array
+    {
         if ($incomingRows === []) {
             return [];
         }
@@ -42,18 +61,19 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
         }
 
         if (count($keyFields) === 1) {
-            return $this->fetchBySingleKey($metadata, $indexed->rowsByKey, $keyFields[0]);
+            return $this->fetchBySingleKey($metadata, $indexed->rowsByKey, $keyFields[0], $scope);
         }
 
-        return $this->fetchByCompositeKey($metadata, $keyFields, array_values($indexed->rowsByKey));
+        return $this->fetchByCompositeKey($metadata, $keyFields, array_values($indexed->rowsByKey), $scope);
     }
 
     /**
      * @param array<string,array<string,mixed>> $rowsByKey
+     * @param array<string,scalar|null> $scope
      * @return list<array<string,mixed>>
      * @throws Exception
      */
-    private function fetchBySingleKey(EntityMetadata $metadata, array $rowsByKey, string $keyField): array
+    private function fetchBySingleKey(EntityMetadata $metadata, array $rowsByKey, string $keyField, array $scope): array
     {
         $keyColumn = $metadata->fieldToColumn[$keyField] ?? null;
         if ($keyColumn === null) {
@@ -92,6 +112,7 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
         }
 
         $qb->where(implode(' OR ', $conditions));
+        $this->applyScope($qb, $metadata, $scope);
         $rawRows = $qb->executeQuery()->fetchAllAssociative();
 
         return array_map(fn (array $rawRow): array => $this->mapColumnRowToFieldRow($metadata, $rawRow), $rawRows);
@@ -100,10 +121,11 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
     /**
      * @param list<string> $keyFields
      * @param list<array<string,mixed>> $rows
+     * @param array<string,scalar|null> $scope
      * @return list<array<string,mixed>>
      * @throws Exception
      */
-    private function fetchByCompositeKey(EntityMetadata $metadata, array $keyFields, array $rows): array
+    private function fetchByCompositeKey(EntityMetadata $metadata, array $keyFields, array $rows, array $scope): array
     {
         $allRawRows = [];
 
@@ -134,6 +156,7 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
             }
 
             $qb->where(implode(' OR ', $rowConditions));
+            $this->applyScope($qb, $metadata, $scope);
             $allRawRows = [...$allRawRows, ...$qb->executeQuery()->fetchAllAssociative()];
         }
 
@@ -178,6 +201,11 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
 
     public function iterateAllKeys(EntityMetadata $metadata, array $keyFields, int $batchSize = self::KEY_SCAN_BATCH_SIZE): iterable
     {
+        return $this->iterateAllKeysInScope($metadata, $keyFields, [], $batchSize);
+    }
+
+    public function iterateAllKeysInScope(EntityMetadata $metadata, array $keyFields, array $scope, int $batchSize = self::KEY_SCAN_BATCH_SIZE): iterable
+    {
         if ($keyFields === []) {
             return;
         }
@@ -204,6 +232,8 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
             if ($lastRow !== null) {
                 $qb->where($this->buildKeysetCondition($qb, $columns, $quotedColumns, $lastRow));
             }
+
+            $this->applyScope($qb, $metadata, $scope);
 
             $rawRows = $qb->executeQuery()->fetchAllAssociative();
             if ($rawRows === []) {
@@ -252,6 +282,32 @@ final class DbalExistingRowsProvider implements ExistingRowsProviderInterface, S
         }
 
         return implode(' OR ', $alternatives);
+    }
+
+    /**
+     * @param array<string,scalar|null> $scope
+     * @throws MetadataException
+     */
+    private function applyScope(QueryBuilder $qb, EntityMetadata $metadata, array $scope): void
+    {
+        $index = 0;
+
+        foreach ($scope as $field => $value) {
+            $column = $metadata->fieldToColumn[$field] ?? null;
+            if ($column === null) {
+                throw new MetadataException(sprintf('Scope field "%s" has no column mapping.', $field));
+            }
+
+            $quotedColumn = $this->quoteIdentifier($column);
+            if ($value === null) {
+                $qb->andWhere(sprintf('%s IS NULL', $quotedColumn));
+                continue;
+            }
+
+            $param = sprintf('scope_%d', $index++);
+            $qb->andWhere(sprintf('%s = :%s', $quotedColumn, $param));
+            $qb->setParameter($param, $value, $this->detectType($value));
+        }
     }
 
     /**

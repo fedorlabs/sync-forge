@@ -19,6 +19,8 @@ final class SyncBuilder
     private bool $deleteMissing = false;
     private bool $dryRun = false;
     private bool $continueOnError = false;
+    /** @var array<string,scalar|null> */
+    private array $scope = [];
 
     public function __construct(
         private readonly SyncPipelineInterface $pipeline,
@@ -88,6 +90,33 @@ final class SyncBuilder
         return $this;
     }
 
+    /**
+     * Limits the sync to rows matching these field values: existing rows are looked up and deleted only within
+     * the scope, and the values are filled into inserted rows that do not carry them.
+     *
+     * @param array<array-key,mixed> $scope
+     */
+    public function scope(array $scope): self
+    {
+        $validated = [];
+
+        foreach ($scope as $field => $value) {
+            if (!is_string($field) || $field === '') {
+                throw new InvalidConfigurationException('Scope must map non-empty field names to values.');
+            }
+
+            if ($value !== null && !is_scalar($value)) {
+                throw new InvalidConfigurationException(sprintf('Scope value for "%s" must be scalar or null.', $field));
+            }
+
+            $validated[$field] = $value;
+        }
+
+        $this->scope = $validated;
+
+        return $this;
+    }
+
     public function run(): SyncResult
     {
         if ($this->keyFields === []) {
@@ -106,6 +135,7 @@ final class SyncBuilder
             deleteMissing: $this->deleteMissing,
             dryRun: $this->dryRun,
             continueOnError: $this->continueOnError,
+            scope: $this->scope,
         ));
     }
 }

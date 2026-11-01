@@ -5,6 +5,7 @@
 ### Added
 - Objects and arrays are converted through the DBAL type named in `EntityMetadata::$fieldTypes`, not only dates, so custom types such as money and `json` columns work. `BackedEnum` values are written as their backing value. Custom DBAL types also own the conversion of `DateTimeInterface` values.
 - The diff compares converted values with the raw database value (`json` structurally, other scalars as strings). `DatabasePlatformContext` and `DiffContext` carry the optional DBAL platform for this.
+- `SyncBuilder::scope()` and `SyncContext::$scope` limit existing-row lookups and `deleteMissing` to rows matching the given field values, and fill the values into inserted rows. Requires an existing rows provider implementing the new `ScopedExistingRowsProviderInterface`, which `DbalExistingRowsProvider` does.
 
 ## [0.2.1] - 2026-11-01
 
